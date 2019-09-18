@@ -22,6 +22,7 @@ package validator
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 
 	workflow "github.com/uber/cadence/.gen/go/shared"
@@ -74,9 +75,9 @@ func (qv *VisibilityQueryValidator) validateListOrCountRequestForQuery(whereClau
 		var sqlQuery string
 		whereClause := strings.TrimSpace(whereClause)
 		if common.IsJustOrderByClause(whereClause) { // just order by
-			sqlQuery = "SELECT * FROM dummy " + whereClause
+			sqlQuery = fmt.Sprintf("SELECT * FROM dummy %s", whereClause)
 		} else {
-			sqlQuery = "SELECT * FROM dummy WHERE " + whereClause
+			sqlQuery = fmt.Sprintf("SELECT * FROM dummy WHERE %s", whereClause)
 		}
 
 		stmt, err := sqlparser.Parse(sqlQuery)

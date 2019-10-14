@@ -25,8 +25,10 @@ import (
 	"time"
 
 	"github.com/pborman/uuid"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/suite"
 	"github.com/uber-go/tally"
+
 	"github.com/uber/cadence/.gen/go/replicator"
 	"github.com/uber/cadence/.gen/go/shared"
 	workflow "github.com/uber/cadence/.gen/go/shared"
@@ -50,10 +52,9 @@ type (
 		logger              log.Logger
 		mockShard           ShardContext
 		mockExecutionMgr    *mocks.ExecutionManager
-		mockHistoryMgr      *mocks.HistoryManager
 		mockHistoryV2Mgr    *mocks.HistoryV2Manager
 		mockProducer        *mocks.KafkaProducer
-		mockMetadataMgr     *mocks.MetadataManager
+		mockDomainCache     *cache.DomainCacheMock
 		mockClusterMetadata *mocks.ClusterMetadata
 		mockClientBean      *client.MockClientBean
 		mockMessagingClient messaging.Client
@@ -82,14 +83,13 @@ func (s *replicatorQueueProcessorSuite) SetupTest() {
 	s.currentClusterNamer = cluster.TestCurrentClusterName
 	s.logger = loggerimpl.NewDevelopmentForTest(s.Suite)
 	s.mockExecutionMgr = &mocks.ExecutionManager{}
-	s.mockHistoryMgr = &mocks.HistoryManager{}
 	s.mockHistoryV2Mgr = &mocks.HistoryV2Manager{}
 	s.mockProducer = &mocks.KafkaProducer{}
-	s.mockMetadataMgr = &mocks.MetadataManager{}
+	s.mockDomainCache = &cache.DomainCacheMock{}
 	s.mockClusterMetadata = &mocks.ClusterMetadata{}
 	s.mockMessagingClient = mocks.NewMockMessagingClient(s.mockProducer, nil)
 	s.mockClientBean = &client.MockClientBean{}
-	s.mockService = service.NewTestService(s.mockClusterMetadata, s.mockMessagingClient, metricsClient, s.mockClientBean, nil, nil)
+	s.mockService = service.NewTestService(s.mockClusterMetadata, s.mockMessagingClient, metricsClient, s.mockClientBean, nil, nil, nil)
 	s.mockShard = &shardContextImpl{
 		service:                   s.mockService,
 		shardInfo:                 &persistence.ShardInfo{ShardID: 0, RangeID: 1, TransferAckLevel: 0},
@@ -100,7 +100,7 @@ func (s *replicatorQueueProcessorSuite) SetupTest() {
 		config:                    NewDynamicConfigForTest(),
 		logger:                    s.logger,
 		metricsClient:             metricsClient,
-		domainCache:               cache.NewDomainCache(s.mockMetadataMgr, s.mockClusterMetadata, metricsClient, s.logger),
+		domainCache:               s.mockDomainCache,
 		executionManager:          s.mockExecutionMgr,
 		standbyClusterCurrentTime: make(map[string]time.Time),
 		timeSource:                clock.NewRealTimeSource(),
@@ -110,20 +110,20 @@ func (s *replicatorQueueProcessorSuite) SetupTest() {
 	s.mockClusterMetadata.On("IsGlobalDomainEnabled").Return(true)
 
 	s.replicatorQueueProcessor = newReplicatorQueueProcessor(
-		s.mockShard, historyCache, s.mockProducer, s.mockExecutionMgr, s.mockHistoryMgr, s.mockHistoryV2Mgr, s.logger,
+		s.mockShard, historyCache, s.mockProducer, s.mockExecutionMgr, s.mockHistoryV2Mgr, s.logger,
 	).(*replicatorQueueProcessorImpl)
 }
 
 func (s *replicatorQueueProcessorSuite) TearDownTest() {
 	s.mockExecutionMgr.AssertExpectations(s.T())
-	s.mockHistoryMgr.AssertExpectations(s.T())
 	s.mockHistoryV2Mgr.AssertExpectations(s.T())
 	s.mockProducer.AssertExpectations(s.T())
 	s.mockClientBean.AssertExpectations(s.T())
 }
 
 func (s *replicatorQueueProcessorSuite) TestSyncActivity_WorkflowMissing() {
-	domainID := validDomainID
+	domainName := "some random domain name"
+	domainID := testDomainID
 	workflowID := "some random workflow ID"
 	runID := uuid.New()
 	scheduleID := int64(144)
@@ -144,19 +144,32 @@ func (s *replicatorQueueProcessorSuite) TestSyncActivity_WorkflowMissing() {
 			RunId:      common.StringPtr(runID),
 		},
 	}).Return(nil, &shared.EntityNotExistsError{})
+	s.mockDomainCache.On("GetDomainByID", domainID).Return(cache.NewGlobalDomainCacheEntryForTest(
+		&persistence.DomainInfo{ID: domainID, Name: domainName},
+		&persistence.DomainConfig{Retention: 1},
+		&persistence.DomainReplicationConfig{
+			ActiveClusterName: cluster.TestCurrentClusterName,
+			Clusters: []*persistence.ClusterReplicationConfig{
+				{ClusterName: cluster.TestCurrentClusterName},
+				{ClusterName: cluster.TestAlternativeClusterName},
+			},
+		},
+		1234,
+		nil,
+	), nil)
 
 	_, err := s.replicatorQueueProcessor.process(task, true)
 	s.Nil(err)
 }
 
 func (s *replicatorQueueProcessorSuite) TestSyncActivity_WorkflowCompleted() {
-	domainID := validDomainID
+	domainName := "some random domain name"
+	domainID := testDomainID
 	workflowID := "some random workflow ID"
 	runID := uuid.New()
 	scheduleID := int64(144)
 	taskID := int64(1444)
 	version := int64(2333)
-	nextEventID := int64(133)
 	task := &persistence.ReplicationTaskInfo{
 		TaskType:    persistence.ReplicationTaskTypeSyncActivity,
 		TaskID:      taskID,
@@ -177,13 +190,21 @@ func (s *replicatorQueueProcessorSuite) TestSyncActivity_WorkflowCompleted() {
 	msBuilder := &mockMutableState{}
 	context.(*workflowExecutionContextImpl).msBuilder = msBuilder
 	release(nil)
-	msBuilder.On("GetReplicationState").Return(&persistence.ReplicationState{
-		CurrentVersion:   version,
-		StartVersion:     version,
-		LastWriteVersion: version,
-		LastWriteEventID: nextEventID - 1,
-	})
+	msBuilder.On("StartTransaction", mock.Anything).Return(false, nil).Once()
 	msBuilder.On("IsWorkflowExecutionRunning").Return(false)
+	s.mockDomainCache.On("GetDomainByID", domainID).Return(cache.NewGlobalDomainCacheEntryForTest(
+		&persistence.DomainInfo{ID: domainID, Name: domainName},
+		&persistence.DomainConfig{Retention: 1},
+		&persistence.DomainReplicationConfig{
+			ActiveClusterName: cluster.TestCurrentClusterName,
+			Clusters: []*persistence.ClusterReplicationConfig{
+				{ClusterName: cluster.TestCurrentClusterName},
+				{ClusterName: cluster.TestAlternativeClusterName},
+			},
+		},
+		version,
+		nil,
+	), nil)
 
 	_, err := s.replicatorQueueProcessor.process(task, true)
 	s.Nil(err)
@@ -191,13 +212,12 @@ func (s *replicatorQueueProcessorSuite) TestSyncActivity_WorkflowCompleted() {
 
 func (s *replicatorQueueProcessorSuite) TestSyncActivity_ActivityCompleted() {
 	domainName := "some random domain name"
-	domainID := validDomainID
+	domainID := testDomainID
 	workflowID := "some random workflow ID"
 	runID := uuid.New()
 	scheduleID := int64(144)
 	taskID := int64(1444)
 	version := int64(2333)
-	nextEventID := int64(133)
 	task := &persistence.ReplicationTaskInfo{
 		TaskType:    persistence.ReplicationTaskTypeSyncActivity,
 		TaskID:      taskID,
@@ -218,33 +238,22 @@ func (s *replicatorQueueProcessorSuite) TestSyncActivity_ActivityCompleted() {
 	msBuilder := &mockMutableState{}
 	context.(*workflowExecutionContextImpl).msBuilder = msBuilder
 	release(nil)
-
+	msBuilder.On("StartTransaction", mock.Anything).Return(false, nil).Once()
 	msBuilder.On("IsWorkflowExecutionRunning").Return(true)
-	msBuilder.On("GetReplicationState").Return(&persistence.ReplicationState{
-		CurrentVersion:   version,
-		StartVersion:     version,
-		LastWriteVersion: version,
-		LastWriteEventID: nextEventID - 1,
-	})
-	msBuilder.On("GetLastWriteVersion").Return(version)
-	msBuilder.On("UpdateReplicationPolicy", cache.ReplicationPolicyOneCluster).Once()
-	msBuilder.On("UpdateReplicationStateVersion", version, false).Once()
 	msBuilder.On("GetActivityInfo", scheduleID).Return(nil, false)
-	s.mockMetadataMgr.On("GetDomain", &persistence.GetDomainRequest{ID: domainID}).Return(
-		&persistence.GetDomainResponse{
-			Info:   &persistence.DomainInfo{ID: domainID, Name: domainName},
-			Config: &persistence.DomainConfig{Retention: 1},
-			ReplicationConfig: &persistence.DomainReplicationConfig{
-				ActiveClusterName: cluster.TestCurrentClusterName,
-				Clusters: []*persistence.ClusterReplicationConfig{
-					{ClusterName: cluster.TestCurrentClusterName},
-				},
+	s.mockDomainCache.On("GetDomainByID", domainID).Return(cache.NewGlobalDomainCacheEntryForTest(
+		&persistence.DomainInfo{ID: domainID, Name: domainName},
+		&persistence.DomainConfig{Retention: 1},
+		&persistence.DomainReplicationConfig{
+			ActiveClusterName: cluster.TestCurrentClusterName,
+			Clusters: []*persistence.ClusterReplicationConfig{
+				{ClusterName: cluster.TestCurrentClusterName},
+				{ClusterName: cluster.TestAlternativeClusterName},
 			},
-			FailoverVersion: version,
-			IsGlobalDomain:  true,
-			TableVersion:    persistence.DomainTableVersionV1,
-		}, nil,
-	).Once()
+		},
+		version,
+		nil,
+	), nil)
 
 	_, err := s.replicatorQueueProcessor.process(task, true)
 	s.Nil(err)
@@ -252,13 +261,12 @@ func (s *replicatorQueueProcessorSuite) TestSyncActivity_ActivityCompleted() {
 
 func (s *replicatorQueueProcessorSuite) TestSyncActivity_ActivityRetry() {
 	domainName := "some random domain name"
-	domainID := validDomainID
+	domainID := testDomainID
 	workflowID := "some random workflow ID"
 	runID := uuid.New()
 	scheduleID := int64(144)
 	taskID := int64(1444)
 	version := int64(2333)
-	nextEventID := int64(133)
 	task := &persistence.ReplicationTaskInfo{
 		TaskType:    persistence.ReplicationTaskTypeSyncActivity,
 		TaskID:      taskID,
@@ -291,17 +299,8 @@ func (s *replicatorQueueProcessorSuite) TestSyncActivity_ActivityRetry() {
 	activityLastFailureReason := "some random reason"
 	activityLastWorkerIdentity := "some random worker identity"
 	activityLastFailureDetails := []byte("some random failure details")
-
+	msBuilder.On("StartTransaction", mock.Anything).Return(false, nil).Once()
 	msBuilder.On("IsWorkflowExecutionRunning").Return(true)
-	msBuilder.On("GetReplicationState").Return(&persistence.ReplicationState{
-		CurrentVersion:   version,
-		StartVersion:     version,
-		LastWriteVersion: version,
-		LastWriteEventID: nextEventID - 1,
-	})
-	msBuilder.On("GetLastWriteVersion").Return(version)
-	msBuilder.On("UpdateReplicationPolicy", cache.ReplicationPolicyOneCluster).Once()
-	msBuilder.On("UpdateReplicationStateVersion", version, false).Once()
 	msBuilder.On("GetActivityInfo", scheduleID).Return(&persistence.ActivityInfo{
 		Version:                  activityVersion,
 		ScheduleID:               activityScheduleID,
@@ -315,21 +314,20 @@ func (s *replicatorQueueProcessorSuite) TestSyncActivity_ActivityRetry() {
 		LastWorkerIdentity:       activityLastWorkerIdentity,
 		LastFailureDetails:       activityLastFailureDetails,
 	}, true)
-	s.mockMetadataMgr.On("GetDomain", &persistence.GetDomainRequest{ID: domainID}).Return(
-		&persistence.GetDomainResponse{
-			Info:   &persistence.DomainInfo{ID: domainID, Name: domainName},
-			Config: &persistence.DomainConfig{Retention: 1},
-			ReplicationConfig: &persistence.DomainReplicationConfig{
-				ActiveClusterName: cluster.TestCurrentClusterName,
-				Clusters: []*persistence.ClusterReplicationConfig{
-					{ClusterName: cluster.TestCurrentClusterName},
-				},
+	s.mockDomainCache.On("GetDomainByID", domainID).Return(cache.NewGlobalDomainCacheEntryForTest(
+		&persistence.DomainInfo{ID: domainID, Name: domainName},
+		&persistence.DomainConfig{Retention: 1},
+		&persistence.DomainReplicationConfig{
+			ActiveClusterName: cluster.TestCurrentClusterName,
+			Clusters: []*persistence.ClusterReplicationConfig{
+				{ClusterName: cluster.TestCurrentClusterName},
+				{ClusterName: cluster.TestAlternativeClusterName},
 			},
-			FailoverVersion: version,
-			IsGlobalDomain:  true,
-			TableVersion:    persistence.DomainTableVersionV1,
-		}, nil,
-	).Once()
+		},
+		version,
+		nil,
+	), nil)
+
 	s.mockProducer.On("Publish", &replicator.ReplicationTask{
 		TaskType: replicator.ReplicationTaskType.Ptr(replicator.ReplicationTaskTypeSyncActivity),
 		SyncActicvityTaskAttributes: &replicator.SyncActicvityTaskAttributes{
@@ -356,13 +354,12 @@ func (s *replicatorQueueProcessorSuite) TestSyncActivity_ActivityRetry() {
 
 func (s *replicatorQueueProcessorSuite) TestSyncActivity_ActivityRunning() {
 	domainName := "some random domain name"
-	domainID := validDomainID
+	domainID := testDomainID
 	workflowID := "some random workflow ID"
 	runID := uuid.New()
 	scheduleID := int64(144)
 	taskID := int64(1444)
 	version := int64(2333)
-	nextEventID := int64(133)
 	task := &persistence.ReplicationTaskInfo{
 		TaskType:    persistence.ReplicationTaskTypeSyncActivity,
 		TaskID:      taskID,
@@ -395,17 +392,8 @@ func (s *replicatorQueueProcessorSuite) TestSyncActivity_ActivityRunning() {
 	activityLastFailureReason := "some random reason"
 	activityLastWorkerIdentity := "some random worker identity"
 	activityLastFailureDetails := []byte("some random failure details")
-
+	msBuilder.On("StartTransaction", mock.Anything).Return(false, nil).Once()
 	msBuilder.On("IsWorkflowExecutionRunning").Return(true)
-	msBuilder.On("GetReplicationState").Return(&persistence.ReplicationState{
-		CurrentVersion:   version,
-		StartVersion:     version,
-		LastWriteVersion: version,
-		LastWriteEventID: nextEventID - 1,
-	})
-	msBuilder.On("GetLastWriteVersion").Return(version)
-	msBuilder.On("UpdateReplicationPolicy", cache.ReplicationPolicyOneCluster).Once()
-	msBuilder.On("UpdateReplicationStateVersion", version, false).Once()
 	msBuilder.On("GetActivityInfo", scheduleID).Return(&persistence.ActivityInfo{
 		Version:                  activityVersion,
 		ScheduleID:               activityScheduleID,
@@ -419,21 +407,19 @@ func (s *replicatorQueueProcessorSuite) TestSyncActivity_ActivityRunning() {
 		LastWorkerIdentity:       activityLastWorkerIdentity,
 		LastFailureDetails:       activityLastFailureDetails,
 	}, true)
-	s.mockMetadataMgr.On("GetDomain", &persistence.GetDomainRequest{ID: domainID}).Return(
-		&persistence.GetDomainResponse{
-			Info:   &persistence.DomainInfo{ID: domainID, Name: domainName},
-			Config: &persistence.DomainConfig{Retention: 1},
-			ReplicationConfig: &persistence.DomainReplicationConfig{
-				ActiveClusterName: cluster.TestCurrentClusterName,
-				Clusters: []*persistence.ClusterReplicationConfig{
-					{ClusterName: cluster.TestCurrentClusterName},
-				},
+	s.mockDomainCache.On("GetDomainByID", domainID).Return(cache.NewGlobalDomainCacheEntryForTest(
+		&persistence.DomainInfo{ID: domainID, Name: domainName},
+		&persistence.DomainConfig{Retention: 1},
+		&persistence.DomainReplicationConfig{
+			ActiveClusterName: cluster.TestCurrentClusterName,
+			Clusters: []*persistence.ClusterReplicationConfig{
+				{ClusterName: cluster.TestCurrentClusterName},
+				{ClusterName: cluster.TestAlternativeClusterName},
 			},
-			FailoverVersion: version,
-			IsGlobalDomain:  true,
-			TableVersion:    persistence.DomainTableVersionV1,
-		}, nil,
-	).Once()
+		},
+		version,
+		nil,
+	), nil)
 	s.mockProducer.On("Publish", &replicator.ReplicationTask{
 		TaskType: replicator.ReplicationTaskType.Ptr(replicator.ReplicationTaskTypeSyncActivity),
 		SyncActicvityTaskAttributes: &replicator.SyncActicvityTaskAttributes{
@@ -459,16 +445,13 @@ func (s *replicatorQueueProcessorSuite) TestSyncActivity_ActivityRunning() {
 }
 
 func (s *replicatorQueueProcessorSuite) TestPaginateHistoryWithShardID() {
-	domainID := validDomainID
-	workflowID := "some random workflow ID"
-	runID := uuid.New()
 	firstEventID := int64(133)
 	nextEventID := int64(134)
 	pageSize := 1
 	shardID := common.IntPtr(1)
 
 	req := &persistence.ReadHistoryBranchRequest{
-		BranchToken:   []byte{},
+		BranchToken:   []byte("asd"),
 		MinEventID:    firstEventID,
 		MaxEventID:    nextEventID,
 		PageSize:      pageSize,
@@ -485,9 +468,8 @@ func (s *replicatorQueueProcessorSuite) TestPaginateHistoryWithShardID() {
 		Size:             1,
 		LastFirstEventID: nextEventID,
 	}, nil).Once()
-	hEvents, bEvents, token, size, err := PaginateHistory(s.mockHistoryMgr, s.mockHistoryV2Mgr, nil, nil,
-		false, domainID, workflowID, runID, firstEventID, nextEventID, []byte{},
-		persistence.EventStoreVersionV2, []byte{}, pageSize, shardID)
+	hEvents, bEvents, token, size, err := PaginateHistory(s.mockHistoryV2Mgr, false, []byte("asd"),
+		firstEventID, nextEventID, []byte{}, pageSize, shardID)
 	s.NotNil(hEvents)
 	s.NotNil(bEvents)
 	s.NotNil(token)

@@ -53,7 +53,7 @@ var (
 	testDomainEmitMetric         = true
 	testDomainActiveClusterName  = cluster.TestCurrentClusterName
 	testDomainStandbyClusterName = cluster.TestAlternativeClusterName
-	testDomainIsGlobalDomain     = true
+	testDomainIsGlobalDomain     = false
 	testDomainAllClusters        = []*persistence.ClusterReplicationConfig{
 		{ClusterName: testDomainActiveClusterName},
 		{ClusterName: testDomainStandbyClusterName},
@@ -68,7 +68,6 @@ type (
 		service                service.Service
 		shardInfo              *persistence.ShardInfo
 		transferSequenceNumber int64
-		historyMgr             persistence.HistoryManager
 		historyV2Mgr           persistence.HistoryV2Manager
 		executionMgr           persistence.ExecutionManager
 		domainCache            cache.DomainCache
@@ -93,12 +92,12 @@ type (
 var _ ShardContext = (*TestShardContext)(nil)
 
 func newTestShardContext(shardInfo *persistence.ShardInfo, transferSequenceNumber int64,
-	historyMgr persistence.HistoryManager, historyV2Mgr persistence.HistoryV2Manager, executionMgr persistence.ExecutionManager,
-	metadataMgr persistence.MetadataManager, metadataMgrV2 persistence.MetadataManager, clusterMetadata cluster.Metadata,
+	historyV2Mgr persistence.HistoryV2Manager, executionMgr persistence.ExecutionManager,
+	metadataMgr persistence.MetadataManager, clusterMetadata cluster.Metadata,
 	clientBean client.Bean, config *Config, logger log.Logger) *TestShardContext {
 	metricsClient := metrics.NewClient(tally.NoopScope, metrics.History)
 	domainCache := cache.NewDomainCache(metadataMgr, clusterMetadata, metricsClient, logger)
-
+	serializer := persistence.NewPayloadSerializer()
 	// initialize the cluster current time to be the same as ack level
 	standbyClusterCurrentTime := make(map[string]time.Time)
 	timerMaxReadLevelMap := make(map[string]time.Time)
@@ -121,11 +120,17 @@ func newTestShardContext(shardInfo *persistence.ShardInfo, transferSequenceNumbe
 	}
 
 	shardCtx := &TestShardContext{
-		shardID:                   0,
-		service:                   service.NewTestService(clusterMetadata, nil, metricsClient, clientBean, nil, nil),
+		shardID: 0,
+		service: service.NewTestService(
+			clusterMetadata,
+			nil,
+			metricsClient,
+			clientBean,
+			nil,
+			nil,
+			serializer),
 		shardInfo:                 shardInfo,
 		transferSequenceNumber:    transferSequenceNumber,
-		historyMgr:                historyMgr,
 		historyV2Mgr:              historyV2Mgr,
 		executionMgr:              executionMgr,
 		domainCache:               domainCache,
@@ -154,11 +159,6 @@ func (s *TestShardContext) GetService() service.Service {
 // GetExecutionManager test implementation
 func (s *TestShardContext) GetExecutionManager() persistence.ExecutionManager {
 	return s.executionMgr
-}
-
-// GetHistoryManager test implementation
-func (s *TestShardContext) GetHistoryManager() persistence.HistoryManager {
-	return s.historyMgr
 }
 
 // GetHistoryV2Manager return historyV2
@@ -422,7 +422,7 @@ func (s *TestShardContext) UpdateWorkflowExecution(request *persistence.UpdateWo
 		if ts.Before(s.timerMaxReadLevelMap[clusterName]) {
 			// This can happen if shard move and new host have a time SKU, or there is db write delay.
 			// We generate a new timer ID using timerMaxReadLevel.
-			s.logger.Warn(fmt.Sprintf("%v: New timer generated is less than read level. timestamp: %v, timerMaxReadLevel: %v",
+			s.logger.Debug(fmt.Sprintf("%v: New timer generated is less than read level. timestamp: %v, timerMaxReadLevel: %v",
 				time.Now(), ts, s.timerMaxReadLevelMap[clusterName]), tag.ClusterName(clusterName))
 			task.SetVisibilityTimestamp(s.timerMaxReadLevelMap[clusterName].Add(time.Millisecond))
 		}
@@ -469,18 +469,15 @@ func (s *TestShardContext) ResetWorkflowExecution(request *persistence.ResetWork
 	return s.executionMgr.ResetWorkflowExecution(request)
 }
 
-// AppendHistoryEvents test implementation
-func (s *TestShardContext) AppendHistoryEvents(request *persistence.AppendHistoryEventsRequest) (int, error) {
-	resp, err := s.historyMgr.AppendHistoryEvents(request)
-	return resp.Size, err
-}
-
 // AppendHistoryV2Events append history V2 events
 func (s *TestShardContext) AppendHistoryV2Events(
 	request *persistence.AppendHistoryNodesRequest, domainID string, execution shared.WorkflowExecution) (int, error) {
 	request.ShardID = common.IntPtr(s.shardID)
 	resp, err := s.historyV2Mgr.AppendHistoryNodes(request)
-	return resp.Size, err
+	if err != nil {
+		return 0, err
+	}
+	return resp.Size, nil
 }
 
 // GetConfig test implementation
@@ -552,14 +549,6 @@ func NewDynamicConfigForTest() *Config {
 	return config
 }
 
-// NewDynamicConfigForEventsV2Test with enableEventsV2 = true
-func NewDynamicConfigForEventsV2Test() *Config {
-	dc := dynamicconfig.NewNopCollection()
-	config := NewConfig(dc, 1, cconfig.StoreTypeCassandra, false)
-	config.EnableEventsV2 = dc.GetBoolPropertyFnWithDomainFilter(dynamicconfig.EnableEventsV2, true)
-	return config
-}
-
 // SetupWorkflowStore to setup workflow test base
 func (s *TestBase) SetupWorkflowStore() {
 	s.TestBase = persistencetests.NewTestBaseWithCassandra(&persistencetests.TestBaseOptions{})
@@ -567,14 +556,18 @@ func (s *TestBase) SetupWorkflowStore() {
 	log := loggerimpl.NewDevelopmentForTest(s.Suite)
 	config := NewDynamicConfigForTest()
 	clusterMetadata := cluster.GetTestClusterMetadata(false, false)
-	s.ShardContext = newTestShardContext(s.ShardInfo, 0, s.HistoryMgr, s.HistoryV2Mgr, s.ExecutionManager, s.MetadataManager, s.MetadataManagerV2,
-		clusterMetadata, nil, config, log)
+	s.ShardContext = newTestShardContext(s.ShardInfo, 0,
+		s.HistoryV2Mgr, s.ExecutionManager, s.MetadataManager, clusterMetadata, nil, config, log)
 	s.TestBase.TaskIDGenerator = s.ShardContext
 }
 
 // SetupDomains setup the domains used for testing
 func (s *TestBase) SetupDomains() {
 	// create the domains which are active / standby
+	version := int64(0)
+	if !testDomainIsGlobalDomain {
+		version = common.EmptyVersion
+	}
 	createDomainRequest := &persistence.CreateDomainRequest{
 		Info: &persistence.DomainInfo{
 			ID:     testDomainActiveID,
@@ -589,17 +582,32 @@ func (s *TestBase) SetupDomains() {
 			ActiveClusterName: testDomainActiveClusterName,
 			Clusters:          testDomainAllClusters,
 		},
-		IsGlobalDomain: testDomainIsGlobalDomain,
+		IsGlobalDomain:  testDomainIsGlobalDomain,
+		FailoverVersion: version,
 	}
-	s.MetadataManager.CreateDomain(createDomainRequest)
+	_, err := s.MetadataManager.CreateDomain(createDomainRequest)
+	if err != nil {
+		s.Fail(err.Error())
+	}
 	createDomainRequest.Info.ID = testDomainStandbyID
 	createDomainRequest.Info.Name = testDomainStandbyName
 	createDomainRequest.ReplicationConfig.ActiveClusterName = testDomainStandbyClusterName
-	s.MetadataManager.CreateDomain(createDomainRequest)
+	_, err = s.MetadataManager.CreateDomain(createDomainRequest)
+	if err != nil {
+		s.Fail(err.Error())
+	}
+	s.ShardContext.domainCache.Start()
 }
 
 // TeardownDomains delete the domains used for testing
 func (s *TestBase) TeardownDomains() {
-	s.MetadataManager.DeleteDomain(&persistence.DeleteDomainRequest{ID: testDomainActiveID})
-	s.MetadataManager.DeleteDomain(&persistence.DeleteDomainRequest{ID: testDomainStandbyID})
+	s.ShardContext.domainCache.Stop()
+	err := s.MetadataManager.DeleteDomain(&persistence.DeleteDomainRequest{ID: testDomainActiveID})
+	if err != nil {
+		s.Fail(err.Error())
+	}
+	err = s.MetadataManager.DeleteDomain(&persistence.DeleteDomainRequest{ID: testDomainStandbyID})
+	if err != nil {
+		s.Fail(err.Error())
+	}
 }

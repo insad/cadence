@@ -123,6 +123,8 @@ func GetTestClusterConfig(configFile string) (*TestClusterConfig, error) {
 	if TestFlags.TestClusterConfigFile != "" {
 		configLocation = TestFlags.TestClusterConfigFile
 	}
+	// This is just reading a config so it's less of a security concern
+	// #nosec
 	confContent, err := ioutil.ReadFile(configLocation)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read test cluster config file %v: %v", configLocation, err)
@@ -133,7 +135,6 @@ func GetTestClusterConfig(configFile string) (*TestClusterConfig, error) {
 		return nil, fmt.Errorf("failed to decode test cluster config %v", tag.Error(err))
 	}
 
-	options.EnableEventsV2 = TestFlags.EnableEventsV2
 	options.FrontendAddress = TestFlags.FrontendAddr
 	if options.ESConfig != nil {
 		options.ESConfig.Indices[common.VisibilityAppName] += uuid.New()
@@ -240,9 +241,9 @@ func (s *IntegrationBase) registerArchivalDomain() error {
 			},
 		},
 		IsGlobalDomain:  false,
-		FailoverVersion: 0,
+		FailoverVersion: common.EmptyVersion,
 	}
-	response, err := s.testCluster.testBase.MetadataProxy.CreateDomain(domainRequest)
+	response, err := s.testCluster.testBase.MetadataManager.CreateDomain(domainRequest)
 
 	s.Logger.Info("Register domain succeeded",
 		tag.WorkflowDomainName(s.archivalDomainName),

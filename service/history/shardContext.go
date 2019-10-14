@@ -45,7 +45,6 @@ type (
 		GetShardID() int
 		GetService() service.Service
 		GetExecutionManager() persistence.ExecutionManager
-		GetHistoryManager() persistence.HistoryManager
 		GetHistoryV2Manager() persistence.HistoryV2Manager
 		GetDomainCache() cache.DomainCache
 		GetClusterMetadata() cluster.Metadata
@@ -100,7 +99,6 @@ type (
 		UpdateWorkflowExecution(request *persistence.UpdateWorkflowExecutionRequest) (*persistence.UpdateWorkflowExecutionResponse, error)
 		ConflictResolveWorkflowExecution(request *persistence.ConflictResolveWorkflowExecutionRequest) error
 		ResetWorkflowExecution(request *persistence.ResetWorkflowExecutionRequest) error
-		AppendHistoryEvents(request *persistence.AppendHistoryEventsRequest) (int, error)
 		AppendHistoryV2Events(request *persistence.AppendHistoryNodesRequest, domainID string, execution shared.WorkflowExecution) (int, error)
 	}
 
@@ -111,7 +109,6 @@ type (
 		service          service.Service
 		rangeID          int64
 		shardManager     persistence.ShardManager
-		historyMgr       persistence.HistoryManager
 		historyV2Mgr     persistence.HistoryV2Manager
 		executionManager persistence.ExecutionManager
 		domainCache      cache.DomainCache
@@ -156,10 +153,6 @@ func (s *shardContextImpl) GetService() service.Service {
 
 func (s *shardContextImpl) GetExecutionManager() persistence.ExecutionManager {
 	return s.executionManager
-}
-
-func (s *shardContextImpl) GetHistoryManager() persistence.HistoryManager {
-	return s.historyMgr
 }
 
 func (s *shardContextImpl) GetHistoryV2Manager() persistence.HistoryV2Manager {
@@ -435,9 +428,6 @@ func (s *shardContextImpl) CreateWorkflowExecution(
 	defer s.Unlock()
 
 	transferMaxReadLevel := int64(0)
-	// assign IDs for the transfer tasks
-	// Must be done under the shard lock to ensure transfer tasks are written to persistence in increasing
-	// ID order
 	if err := s.allocateTaskIDsLocked(
 		domainEntry,
 		workflowID,
@@ -502,7 +492,9 @@ func (s *shardContextImpl) getDefaultEncoding(domainEntry *cache.DomainCacheEntr
 	return common.EncodingType(s.config.EventEncodingType(domainEntry.GetInfo().Name))
 }
 
-func (s *shardContextImpl) UpdateWorkflowExecution(request *persistence.UpdateWorkflowExecutionRequest) (*persistence.UpdateWorkflowExecutionResponse, error) {
+func (s *shardContextImpl) UpdateWorkflowExecution(
+	request *persistence.UpdateWorkflowExecutionRequest,
+) (*persistence.UpdateWorkflowExecutionResponse, error) {
 
 	domainID := request.UpdateWorkflowMutation.ExecutionInfo.DomainID
 	workflowID := request.UpdateWorkflowMutation.ExecutionInfo.WorkflowID
@@ -518,9 +510,6 @@ func (s *shardContextImpl) UpdateWorkflowExecution(request *persistence.UpdateWo
 	defer s.Unlock()
 
 	transferMaxReadLevel := int64(0)
-	// assign IDs for the transfer tasks
-	// Must be done under the shard lock to ensure transfer tasks are written to persistence in increasing
-	// ID order
 	if err := s.allocateTaskIDsLocked(
 		domainEntry,
 		workflowID,
@@ -606,19 +595,6 @@ func (s *shardContextImpl) ResetWorkflowExecution(request *persistence.ResetWork
 	defer s.Unlock()
 
 	transferMaxReadLevel := int64(0)
-	// assign IDs for the transfer/replication tasks
-	// Must be done under the shard lock to ensure transfer tasks are written to persistence in increasing
-	// ID order
-	if err := s.allocateTaskIDsLocked(
-		domainEntry,
-		workflowID,
-		request.NewWorkflowSnapshot.TransferTasks,
-		request.NewWorkflowSnapshot.ReplicationTasks,
-		request.NewWorkflowSnapshot.TimerTasks,
-		&transferMaxReadLevel,
-	); err != nil {
-		return err
-	}
 	if request.CurrentWorkflowMutation != nil {
 		if err := s.allocateTaskIDsLocked(
 			domainEntry,
@@ -630,6 +606,16 @@ func (s *shardContextImpl) ResetWorkflowExecution(request *persistence.ResetWork
 		); err != nil {
 			return err
 		}
+	}
+	if err := s.allocateTaskIDsLocked(
+		domainEntry,
+		workflowID,
+		request.NewWorkflowSnapshot.TransferTasks,
+		request.NewWorkflowSnapshot.ReplicationTasks,
+		request.NewWorkflowSnapshot.TimerTasks,
+		&transferMaxReadLevel,
+	); err != nil {
+		return err
 	}
 	defer s.updateMaxReadLevelLocked(transferMaxReadLevel)
 
@@ -679,7 +665,9 @@ Reset_Loop:
 	return ErrMaxAttemptsExceeded
 }
 
-func (s *shardContextImpl) ConflictResolveWorkflowExecution(request *persistence.ConflictResolveWorkflowExecutionRequest) error {
+func (s *shardContextImpl) ConflictResolveWorkflowExecution(
+	request *persistence.ConflictResolveWorkflowExecutionRequest,
+) error {
 
 	domainID := request.ResetWorkflowSnapshot.ExecutionInfo.DomainID
 	workflowID := request.ResetWorkflowSnapshot.ExecutionInfo.WorkflowID
@@ -695,9 +683,18 @@ func (s *shardContextImpl) ConflictResolveWorkflowExecution(request *persistence
 	defer s.Unlock()
 
 	transferMaxReadLevel := int64(0)
-	// assign IDs for the transfer/replication tasks
-	// Must be done under the shard lock to ensure transfer tasks are written to persistence in increasing
-	// ID order
+	if request.CurrentWorkflowMutation != nil {
+		if err := s.allocateTaskIDsLocked(
+			domainEntry,
+			workflowID,
+			request.CurrentWorkflowMutation.TransferTasks,
+			request.CurrentWorkflowMutation.ReplicationTasks,
+			request.CurrentWorkflowMutation.TimerTasks,
+			&transferMaxReadLevel,
+		); err != nil {
+			return err
+		}
+	}
 	if err := s.allocateTaskIDsLocked(
 		domainEntry,
 		workflowID,
@@ -708,13 +705,13 @@ func (s *shardContextImpl) ConflictResolveWorkflowExecution(request *persistence
 	); err != nil {
 		return err
 	}
-	if request.CurrentWorkflowMutation != nil {
+	if request.NewWorkflowSnapshot != nil {
 		if err := s.allocateTaskIDsLocked(
 			domainEntry,
 			workflowID,
-			request.CurrentWorkflowMutation.TransferTasks,
-			request.CurrentWorkflowMutation.ReplicationTasks,
-			request.CurrentWorkflowMutation.TimerTasks,
+			request.NewWorkflowSnapshot.TransferTasks,
+			request.NewWorkflowSnapshot.ReplicationTasks,
+			request.NewWorkflowSnapshot.TimerTasks,
 			&transferMaxReadLevel,
 		); err != nil {
 			return err
@@ -806,64 +803,6 @@ func (s *shardContextImpl) AppendHistoryV2Events(
 	if resp != nil {
 		size = resp.Size
 	}
-	return size, err0
-}
-
-func (s *shardContextImpl) AppendHistoryEvents(request *persistence.AppendHistoryEventsRequest) (int, error) {
-
-	domainEntry, err := s.domainCache.GetDomainByID(request.DomainID)
-	if err != nil {
-		return 0, err
-	}
-
-	// NOTE: do not use generateNextTransferTaskIDLocked since
-	// generateNextTransferTaskIDLocked is not guarded by lock
-	transactionID, err := s.GenerateTransferTaskID()
-	if err != nil {
-		return 0, err
-	}
-
-	request.Encoding = s.getDefaultEncoding(domainEntry)
-	request.TransactionID = transactionID
-
-	size := 0
-	defer func() {
-		domain := ""
-		if domainEntry != nil && domainEntry.GetInfo() != nil {
-			domain = domainEntry.GetInfo().Name
-		}
-		domainSizeScope := s.metricsClient.Scope(metrics.SessionSizeStatsScope, metrics.DomainTag(domain))
-		domainSizeScope.RecordTimer(metrics.HistorySize, time.Duration(size))
-
-		if size >= historySizeLogThreshold {
-			s.throttledLogger.Warn("history size threshold breached",
-				tag.WorkflowID(request.Execution.GetWorkflowId()),
-				tag.WorkflowRunID(request.Execution.GetRunId()),
-				tag.WorkflowDomainID(request.DomainID),
-				tag.WorkflowHistorySizeBytes(size))
-		}
-	}()
-
-	// No need to lock context here, as we can write concurrently to append history events
-	currentRangeID := atomic.LoadInt64(&s.rangeID)
-	request.RangeID = currentRangeID
-	resp, err0 := s.historyMgr.AppendHistoryEvents(request)
-	if resp != nil {
-		size = resp.Size
-	}
-
-	if err0 != nil {
-		if _, ok := err0.(*persistence.ConditionFailedError); ok {
-			// Inserting a new event failed, lets try to overwrite the tail
-			request.Overwrite = true
-			resp, err1 := s.historyMgr.AppendHistoryEvents(request)
-			if resp != nil {
-				size = resp.Size
-			}
-			return size, err1
-		}
-	}
-
 	return size, err0
 }
 
@@ -1249,7 +1188,6 @@ func acquireShard(shardItem *historyShardsItem, closeCh chan<- int) (ShardContex
 		clusterMetadata:           shardItem.service.GetClusterMetadata(),
 		service:                   shardItem.service,
 		shardManager:              shardItem.shardMgr,
-		historyMgr:                shardItem.historyMgr,
 		historyV2Mgr:              shardItem.historyV2Mgr,
 		executionManager:          shardItem.executionMgr,
 		domainCache:               shardItem.domainCache,

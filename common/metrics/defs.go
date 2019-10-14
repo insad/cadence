@@ -235,8 +235,14 @@ const (
 	PersistenceCountWorkflowExecutionsScope
 	// PersistenceEnqueueMessageScope tracks Encueue calls made by service to persistence layer
 	PersistenceEnqueueMessageScope
-	// PersistenceDequeueMessagesScope tracks DequeueMessages calls made by service to persistence layer
-	PersistenceDequeueMessagesScope
+	// PersistenceReadQueueMessagesScope tracks ReadMessages calls made by service to persistence layer
+	PersistenceReadQueueMessagesScope
+	// PersistenceDeleteQueueMessagesScope tracks DeleteMessages calls made by service to persistence layer
+	PersistenceDeleteQueueMessagesScope
+	// PersistenceUpdateAckLevelScope tracks UpdateAckLevel calls made by service to persistence layer
+	PersistenceUpdateAckLevelScope
+	// PersistenceGetAckLevelScope tracks GetAckLevel calls made by service to persistence layer
+	PersistenceGetAckLevelScope
 	// HistoryClientStartWorkflowExecutionScope tracks RPC calls to history service
 	HistoryClientStartWorkflowExecutionScope
 	// HistoryClientRecordActivityTaskHeartbeatScope tracks RPC calls to history service
@@ -253,6 +259,8 @@ const (
 	HistoryClientRespondActivityTaskCanceledScope
 	// HistoryClientGetMutableStateScope tracks RPC calls to history service
 	HistoryClientGetMutableStateScope
+	// HistoryClientPollMutableStateScope tracks RPC calls to history service
+	HistoryClientPollMutableStateScope
 	// HistoryClientResetStickyTaskListScope tracks RPC calls to history service
 	HistoryClientResetStickyTaskListScope
 	// HistoryClientDescribeWorkflowExecutionScope tracks RPC calls to history service
@@ -282,6 +290,8 @@ const (
 	// HistoryClientReplicateRawEventsScope tracks RPC calls to history service
 	HistoryClientReplicateRawEventsScope
 	// HistoryClientSyncShardStatusScope tracks RPC calls to history service
+	HistoryClientReplicateEventsV2Scope
+	// HistoryClientReplicateRawEventsV2Scope tracks RPC calls to history service
 	HistoryClientSyncShardStatusScope
 	// HistoryClientSyncActivityScope tracks RPC calls to history service
 	HistoryClientSyncActivityScope
@@ -289,6 +299,8 @@ const (
 	HistoryClientGetReplicationTasksScope
 	// HistoryClientQueryWorkflowScope tracks RPC calls to history service
 	HistoryClientQueryWorkflowScope
+	// HistoryClientReapplyEventsScope tracks RPC calls to history service
+	HistoryClientReapplyEventsScope
 	// MatchingClientPollForDecisionTaskScope tracks RPC calls to matching service
 	MatchingClientPollForDecisionTaskScope
 	// MatchingClientPollForActivityTaskScope tracks RPC calls to matching service
@@ -381,6 +393,8 @@ const (
 	FrontendClientGetReplicationTasksScope
 	// FrontendClientGetDomainReplicationTasksScope tracks RPC calls to frontend service
 	FrontendClientGetDomainReplicationTasksScope
+	// FrontendClientReapplyEventsScope tracks RPC calls to frontend service
+	FrontendClientReapplyEventsScope
 	// AdminClientAddSearchAttributeScope tracks RPC calls to admin service
 	AdminClientAddSearchAttributeScope
 	// AdminClientCloseShardScope tracks RPC calls to admin service
@@ -391,6 +405,8 @@ const (
 	AdminClientDescribeWorkflowExecutionScope
 	// AdminClientGetWorkflowExecutionRawHistoryScope tracks RPC calls to admin service
 	AdminClientGetWorkflowExecutionRawHistoryScope
+	// AdminClientGetWorkflowExecutionRawHistoryV2Scope tracks RPC calls to admin service
+	AdminClientGetWorkflowExecutionRawHistoryV2Scope
 	// DCRedirectionDeprecateDomainScope tracks RPC calls for dc redirection
 	DCRedirectionDeprecateDomainScope
 	// DCRedirectionDescribeDomainScope tracks RPC calls for dc redirection
@@ -536,6 +552,8 @@ const (
 
 	// HistoryArchiverScope is used by history archivers
 	HistoryArchiverScope
+	// VisibilityArchiverScope is used by visibility archivers
+	VisibilityArchiverScope
 
 	// The following metrics are only used by internal archiver implemention.
 	// TODO: move them to internal repo once cadence plugin model is in place.
@@ -564,6 +582,8 @@ const (
 	AdminDescribeWorkflowExecutionScope
 	// AdminGetWorkflowExecutionRawHistoryScope is the metric scope for admin.GetWorkflowExecutionRawHistoryScope
 	AdminGetWorkflowExecutionRawHistoryScope
+	// AdminGetWorkflowExecutionRawHistoryV2Scope is the metric scope for admin.GetWorkflowExecutionRawHistoryScope
+	AdminGetWorkflowExecutionRawHistoryV2Scope
 	// AdminRemoveTaskScope is the metric scope for admin.AdminRemoveTaskScope
 	AdminRemoveTaskScope
 	//AdminCloseShardTaskScope is the metric scope for admin.AdminRemoveTaskScope
@@ -648,6 +668,10 @@ const (
 	FrontendGetReplicationMessagesScope
 	// FrontendGetDomainReplicationMessagesScope is the metric scope for frontend.GetDomainReplicationMessages
 	FrontendGetDomainReplicationMessagesScope
+	// FrontendReapplyEventsScope is the metric scope for frontend.ReapplyEvents
+	FrontendReapplyEventsScope
+	// FrontendDomainReplicationQueueScope is the metrics scope for domain replication queue
+	FrontendDomainReplicationQueueScope
 
 	NumFrontendScopes
 )
@@ -696,6 +720,8 @@ const (
 	HistoryReplicateEventsScope
 	// HistoryReplicateRawEventsScope tracks ReplicateEvents API calls received by service
 	HistoryReplicateRawEventsScope
+	// HistoryReplicateEventsV2Scope tracks ReplicateEvents API calls received by service
+	HistoryReplicateEventsV2Scope
 	// HistorySyncShardStatusScope tracks HistorySyncShardStatus API calls received by service
 	HistorySyncShardStatusScope
 	// HistorySyncActivityScope tracks HistoryActivity API calls received by service
@@ -706,6 +732,8 @@ const (
 	HistoryGetReplicationMessagesScope
 	// HistoryShardControllerScope is the scope used by shard controller
 	HistoryShardControllerScope
+	// HistoryReapplyEventsScope is the scope used by event reapplication
+	HistoryReapplyEventsScope
 	// TransferQueueProcessorScope is the scope used by all metric emitted by transfer queue processor
 	TransferQueueProcessorScope
 	// TransferActiveQueueProcessorScope is the scope used by all metric emitted by transfer queue processor
@@ -870,6 +898,8 @@ const (
 	HistoryReplicationTaskScope
 	// HistoryMetadataReplicationTaskScope is the scope used by history metadata task replication processing
 	HistoryMetadataReplicationTaskScope
+	// HistoryReplicationV2TaskScope is the scope used by history task replication processing
+	HistoryReplicationV2TaskScope
 	// SyncShardTaskScope is the scope used by sync shrad information processing
 	SyncShardTaskScope
 	// SyncActivityTaskScope is the scope used by sync activity information processing
@@ -882,6 +912,8 @@ const (
 	ArchiverDeleteHistoryActivityScope
 	// ArchiverUploadHistoryActivityScope is scope used by all metrics emitted by archiver.UploadHistoryActivity
 	ArchiverUploadHistoryActivityScope
+	// ArchiverArchiveVisibilityActivityScope is scope used by all metrics emitted by archiver.ArchiveVisibilityActivity
+	ArchiverArchiveVisibilityActivityScope
 	// ArchiverScope is scope used by all metrics emitted by archiver.Archiver
 	ArchiverScope
 	// ArchiverPumpScope is scope used by all metrics emitted by archiver.Pump
@@ -965,7 +997,10 @@ var ScopeDefs = map[ServiceIdx]map[int]scopeDefinition{
 		PersistenceGetHistoryTreeScope:                           {operation: "GetHistoryTree"},
 		PersistenceGetAllHistoryTreeBranchesScope:                {operation: "GetAllHistoryTreeBranches"},
 		PersistenceEnqueueMessageScope:                           {operation: "EnqueueMessage"},
-		PersistenceDequeueMessagesScope:                          {operation: "DequeueMessages"},
+		PersistenceReadQueueMessagesScope:                        {operation: "ReadQueueMessages"},
+		PersistenceDeleteQueueMessagesScope:                      {operation: "DeleteQueueMessages"},
+		PersistenceUpdateAckLevelScope:                           {operation: "UpdateAckLevel"},
+		PersistenceGetAckLevelScope:                              {operation: "GetAckLevel"},
 
 		ClusterMetadataArchivalConfigScope: {operation: "ArchivalConfig"},
 
@@ -977,6 +1012,7 @@ var ScopeDefs = map[ServiceIdx]map[int]scopeDefinition{
 		HistoryClientRespondActivityTaskFailedScope:         {operation: "HistoryClientRespondActivityTaskFailed", tags: map[string]string{CadenceRoleTagName: HistoryRoleTagValue}},
 		HistoryClientRespondActivityTaskCanceledScope:       {operation: "HistoryClientRespondActivityTaskCanceled", tags: map[string]string{CadenceRoleTagName: HistoryRoleTagValue}},
 		HistoryClientGetMutableStateScope:                   {operation: "HistoryClientGetMutableState", tags: map[string]string{CadenceRoleTagName: HistoryRoleTagValue}},
+		HistoryClientPollMutableStateScope:                  {operation: "HistoryClientPollMutableState", tags: map[string]string{CadenceRoleTagName: HistoryRoleTagValue}},
 		HistoryClientResetStickyTaskListScope:               {operation: "HistoryClientResetStickyTaskListScope", tags: map[string]string{CadenceRoleTagName: HistoryRoleTagValue}},
 		HistoryClientDescribeWorkflowExecutionScope:         {operation: "HistoryClientDescribeWorkflowExecution", tags: map[string]string{CadenceRoleTagName: HistoryRoleTagValue}},
 		HistoryClientRecordDecisionTaskStartedScope:         {operation: "HistoryClientRecordDecisionTaskStarted", tags: map[string]string{CadenceRoleTagName: HistoryRoleTagValue}},
@@ -991,10 +1027,12 @@ var ScopeDefs = map[ServiceIdx]map[int]scopeDefinition{
 		HistoryClientRecordChildExecutionCompletedScope:     {operation: "HistoryClientRecordChildExecutionCompleted", tags: map[string]string{CadenceRoleTagName: HistoryRoleTagValue}},
 		HistoryClientReplicateEventsScope:                   {operation: "HistoryClientReplicateEvents", tags: map[string]string{CadenceRoleTagName: HistoryRoleTagValue}},
 		HistoryClientReplicateRawEventsScope:                {operation: "HistoryClientReplicateRawEvents", tags: map[string]string{CadenceRoleTagName: HistoryRoleTagValue}},
+		HistoryClientReplicateEventsV2Scope:                 {operation: "HistoryClientReplicateEventsV2", tags: map[string]string{CadenceRoleTagName: HistoryRoleTagValue}},
 		HistoryClientSyncShardStatusScope:                   {operation: "HistoryClientSyncShardStatusScope", tags: map[string]string{CadenceRoleTagName: HistoryRoleTagValue}},
 		HistoryClientSyncActivityScope:                      {operation: "HistoryClientSyncActivityScope", tags: map[string]string{CadenceRoleTagName: HistoryRoleTagValue}},
 		HistoryClientGetReplicationTasksScope:               {operation: "HistoryClientGetReplicationTasksScope", tags: map[string]string{CadenceRoleTagName: HistoryRoleTagValue}},
 		HistoryClientQueryWorkflowScope:                     {operation: "HistoryClientQueryWorkflowScope", tags: map[string]string{CadenceRoleTagName: HistoryRoleTagValue}},
+		HistoryClientReapplyEventsScope:                     {operation: "HistoryClientReapplyEventsScope", tags: map[string]string{CadenceRoleTagName: HistoryRoleTagValue}},
 		MatchingClientPollForDecisionTaskScope:              {operation: "MatchingClientPollForDecisionTask", tags: map[string]string{CadenceRoleTagName: MatchingRoleTagValue}},
 		MatchingClientPollForActivityTaskScope:              {operation: "MatchingClientPollForActivityTask", tags: map[string]string{CadenceRoleTagName: MatchingRoleTagValue}},
 		MatchingClientAddActivityTaskScope:                  {operation: "MatchingClientAddActivityTask", tags: map[string]string{CadenceRoleTagName: MatchingRoleTagValue}},
@@ -1041,10 +1079,12 @@ var ScopeDefs = map[ServiceIdx]map[int]scopeDefinition{
 		FrontendClientGetSearchAttributesScope:              {operation: "FrontendClientGetSearchAttributes", tags: map[string]string{CadenceRoleTagName: FrontendRoleTagValue}},
 		FrontendClientGetReplicationTasksScope:              {operation: "FrontendClientGetReplicationTasksScope", tags: map[string]string{CadenceRoleTagName: FrontendRoleTagValue}},
 		FrontendClientGetDomainReplicationTasksScope:        {operation: "FrontendClientGetDomainReplicationTasksScope", tags: map[string]string{CadenceRoleTagName: FrontendRoleTagValue}},
+		FrontendClientReapplyEventsScope:                    {operation: "FrontendClientReapplyEventsScope", tags: map[string]string{CadenceRoleTagName: FrontendRoleTagValue}},
 		AdminClientAddSearchAttributeScope:                  {operation: "AdminClientAddSearchAttribute", tags: map[string]string{CadenceRoleTagName: AdminRoleTagValue}},
 		AdminClientDescribeHistoryHostScope:                 {operation: "AdminClientDescribeHistoryHost", tags: map[string]string{CadenceRoleTagName: AdminRoleTagValue}},
 		AdminClientDescribeWorkflowExecutionScope:           {operation: "AdminClientDescribeWorkflowExecution", tags: map[string]string{CadenceRoleTagName: AdminRoleTagValue}},
 		AdminClientGetWorkflowExecutionRawHistoryScope:      {operation: "AdminClientGetWorkflowExecutionRawHistory", tags: map[string]string{CadenceRoleTagName: AdminRoleTagValue}},
+		AdminClientGetWorkflowExecutionRawHistoryV2Scope:    {operation: "AdminClientGetWorkflowExecutionRawHistoryV2", tags: map[string]string{CadenceRoleTagName: AdminRoleTagValue}},
 		AdminClientCloseShardScope:                          {operation: "AdminClientCloseShard", tags: map[string]string{CadenceRoleTagName: AdminRoleTagValue}},
 		DCRedirectionDeprecateDomainScope:                   {operation: "DCRedirectionDeprecateDomain", tags: map[string]string{CadenceRoleTagName: DCRedirectionRoleTagValue}},
 		DCRedirectionDescribeDomainScope:                    {operation: "DCRedirectionDescribeDomain", tags: map[string]string{CadenceRoleTagName: DCRedirectionRoleTagValue}},
@@ -1110,7 +1150,8 @@ var ScopeDefs = map[ServiceIdx]map[int]scopeDefinition{
 		ElasticsearchDeleteWorkflowExecutionsScope:                 {operation: "DeleteWorkflowExecution"},
 		SequentialTaskProcessingScope:                              {operation: "SequentialTaskProcessing"},
 
-		HistoryArchiverScope: {operation: "HistoryArchiver"},
+		HistoryArchiverScope:    {operation: "HistoryArchiver"},
+		VisibilityArchiverScope: {operation: "VisibilityArchiver"},
 
 		BlobstoreClientUploadScope:          {operation: "BlobstoreClientUpload", tags: map[string]string{CadenceRoleTagName: BlobstoreRoleTagValue}},
 		BlobstoreClientDownloadScope:        {operation: "BlobstoreClientDownload", tags: map[string]string{CadenceRoleTagName: BlobstoreRoleTagValue}},
@@ -1122,11 +1163,12 @@ var ScopeDefs = map[ServiceIdx]map[int]scopeDefinition{
 	// Frontend Scope Names
 	Frontend: {
 		// Admin API scope co-locates with with frontend
-		AdminRemoveTaskScope:                     {operation: "AdminRemoveTask"},
-		AdminCloseShardTaskScope:                 {operation: "AdminCloseShardTask"},
-		AdminDescribeHistoryHostScope:            {operation: "DescribeHistoryHost"},
-		AdminDescribeWorkflowExecutionScope:      {operation: "DescribeWorkflowExecution"},
-		AdminGetWorkflowExecutionRawHistoryScope: {operation: "GetWorkflowExecutionRawHistory"},
+		AdminRemoveTaskScope:                       {operation: "AdminRemoveTask"},
+		AdminCloseShardTaskScope:                   {operation: "AdminCloseShardTask"},
+		AdminDescribeHistoryHostScope:              {operation: "DescribeHistoryHost"},
+		AdminDescribeWorkflowExecutionScope:        {operation: "DescribeWorkflowExecution"},
+		AdminGetWorkflowExecutionRawHistoryScope:   {operation: "GetWorkflowExecutionRawHistory"},
+		AdminGetWorkflowExecutionRawHistoryV2Scope: {operation: "GetWorkflowExecutionRawHistoryV2"},
 
 		FrontendStartWorkflowExecutionScope:           {operation: "StartWorkflowExecution"},
 		FrontendPollForDecisionTaskScope:              {operation: "PollForDecisionTask"},
@@ -1165,6 +1207,8 @@ var ScopeDefs = map[ServiceIdx]map[int]scopeDefinition{
 		FrontendGetSearchAttributesScope:              {operation: "GetSearchAttributes"},
 		FrontendGetReplicationMessagesScope:           {operation: "GetReplicationMessages"},
 		FrontendGetDomainReplicationMessagesScope:     {operation: "GetDomainReplicationMessages"},
+		FrontendReapplyEventsScope:                    {operation: "ReapplyEvents"},
+		FrontendDomainReplicationQueueScope:           {operation: "DomainReplicationQueue"},
 	},
 	// History Scope Names
 	History: {
@@ -1192,11 +1236,13 @@ var ScopeDefs = map[ServiceIdx]map[int]scopeDefinition{
 		HistoryRequestCancelWorkflowExecutionScope:             {operation: "RequestCancelWorkflowExecution"},
 		HistoryReplicateEventsScope:                            {operation: "ReplicateEvents"},
 		HistoryReplicateRawEventsScope:                         {operation: "ReplicateRawEvents"},
+		HistoryReplicateEventsV2Scope:                          {operation: "ReplicateEventsV2"},
 		HistorySyncShardStatusScope:                            {operation: "SyncShardStatus"},
 		HistorySyncActivityScope:                               {operation: "SyncActivity"},
 		HistoryDescribeMutableStateScope:                       {operation: "DescribeMutableState"},
 		HistoryGetReplicationMessagesScope:                     {operation: "GetReplicationMessages"},
 		HistoryShardControllerScope:                            {operation: "ShardController"},
+		HistoryReapplyEventsScope:                              {operation: "EventReapplication"},
 		TransferQueueProcessorScope:                            {operation: "TransferQueueProcessor"},
 		TransferActiveQueueProcessorScope:                      {operation: "TransferActiveQueueProcessor"},
 		TransferStandbyQueueProcessorScope:                     {operation: "TransferStandbyQueueProcessor"},
@@ -1272,23 +1318,25 @@ var ScopeDefs = map[ServiceIdx]map[int]scopeDefinition{
 	},
 	// Worker Scope Names
 	Worker: {
-		ReplicatorScope:                     {operation: "Replicator"},
-		DomainReplicationTaskScope:          {operation: "DomainReplicationTask"},
-		HistoryReplicationTaskScope:         {operation: "HistoryReplicationTask"},
-		HistoryMetadataReplicationTaskScope: {operation: "HistoryMetadataReplicationTask"},
-		SyncShardTaskScope:                  {operation: "SyncShardTask"},
-		SyncActivityTaskScope:               {operation: "SyncActivityTask"},
-		ESProcessorScope:                    {operation: "ESProcessor"},
-		IndexProcessorScope:                 {operation: "IndexProcessor"},
-		ArchiverDeleteHistoryActivityScope:  {operation: "ArchiverDeleteHistoryActivity"},
-		ArchiverUploadHistoryActivityScope:  {operation: "ArchiverUploadHistoryActivity"},
-		ArchiverScope:                       {operation: "Archiver"},
-		ArchiverPumpScope:                   {operation: "ArchiverPump"},
-		ArchiverArchivalWorkflowScope:       {operation: "ArchiverArchivalWorkflow"},
-		TaskListScavengerScope:              {operation: "tasklistscavenger"},
-		HistoryScavengerScope:               {operation: "historyscavenger"},
-		BatcherScope:                        {operation: "batcher"},
-		ParentClosePolicyProcessorScope:     {operation: "ParentClosePolicyProcessor"},
+		ReplicatorScope:                        {operation: "Replicator"},
+		DomainReplicationTaskScope:             {operation: "DomainReplicationTask"},
+		HistoryReplicationTaskScope:            {operation: "HistoryReplicationTask"},
+		HistoryMetadataReplicationTaskScope:    {operation: "HistoryMetadataReplicationTask"},
+		HistoryReplicationV2TaskScope:          {operation: "HistoryReplicationV2Task"},
+		SyncShardTaskScope:                     {operation: "SyncShardTask"},
+		SyncActivityTaskScope:                  {operation: "SyncActivityTask"},
+		ESProcessorScope:                       {operation: "ESProcessor"},
+		IndexProcessorScope:                    {operation: "IndexProcessor"},
+		ArchiverDeleteHistoryActivityScope:     {operation: "ArchiverDeleteHistoryActivity"},
+		ArchiverUploadHistoryActivityScope:     {operation: "ArchiverUploadHistoryActivity"},
+		ArchiverArchiveVisibilityActivityScope: {operation: "ArchiverArchiveVisibilityActivity"},
+		ArchiverScope:                          {operation: "Archiver"},
+		ArchiverPumpScope:                      {operation: "ArchiverPump"},
+		ArchiverArchivalWorkflowScope:          {operation: "ArchiverArchivalWorkflow"},
+		TaskListScavengerScope:                 {operation: "tasklistscavenger"},
+		HistoryScavengerScope:                  {operation: "historyscavenger"},
+		BatcherScope:                           {operation: "batcher"},
+		ParentClosePolicyProcessorScope:        {operation: "ParentClosePolicyProcessor"},
 	},
 }
 
@@ -1309,6 +1357,7 @@ const (
 	CadenceErrLimitExceededCounter
 	CadenceErrContextTimeoutCounter
 	CadenceErrRetryTaskCounter
+	CadenceErrBadBinaryCounter
 	CadenceErrClientVersionNotSupportedCounter
 	PersistenceRequests
 	PersistenceFailures
@@ -1363,7 +1412,7 @@ const (
 	HistoryArchiverTotalUploadSize
 	HistoryArchiverHistorySize
 
-	// The following metrics are only used by internal archiver implemention.
+	// The following metrics are only used by internal history archiver implemention.
 	// TODO: move them to internal repo once cadence plugin model is in place.
 	HistoryArchiverBlobExistsCount
 	HistoryArchiverBlobSize
@@ -1373,15 +1422,26 @@ const (
 	HistoryArchiverBlobIntegrityCheckFailedCount
 	HistoryArchiverDuplicateArchivalsCount
 
+	VisibilityArchiverArchiveNonRetryableErrorCount
+	VisibilityArchiverArchiveTransientErrorCount
+	VisibilityArchiveSuccessCount
+
 	MatchingClientForwardedCounter
 	MatchingClientInvalidTaskListName
 
 	NumCommonMetrics // Needs to be last on this list for iota numbering
 )
 
+// Frontend Metrics enum
+const (
+	DomainReplicationTaskAckLevel = iota + NumCommonMetrics
+
+	NumFrontendMetrics
+)
+
 // History Metrics enum
 const (
-	TaskRequests = iota + NumCommonMetrics
+	TaskRequests = iota + NumFrontendMetrics
 	TaskLatency
 	TaskFailures
 	TaskDiscarded
@@ -1497,8 +1557,10 @@ const (
 	WorkflowTimeoutCount
 	WorkflowTerminateCount
 	ArchiverClientSendSignalFailureCount
-	ArchiverClientInlineArchiveAttemptCount
-	ArchiverClientInlineArchiveFailureCount
+	ArchiverClientHistoryInlineArchiveAttemptCount
+	ArchiverClientHistoryInlineArchiveFailureCount
+	ArchiverClientVisibilityInlineArchiveAttemptCount
+	ArchiverClientVisibilityInlineArchiveFailureCount
 	LastRetrievedMessageID
 	LastProcessedMessageID
 	ReplicationTasksApplied
@@ -1507,8 +1569,7 @@ const (
 	ReplicationTasksFetched
 	ReplicationTasksReturned
 	GetReplicationMessagesForShardLatency
-	ArchiveVisibilityAttemptCount
-	ArchiveVisibilityFailedCount
+	EventReapplySkippedCount
 
 	NumHistoryMetrics
 )
@@ -1563,13 +1624,16 @@ const (
 	ArchiverStoppedCount
 	ArchiverCoroutineStartedCount
 	ArchiverCoroutineStoppedCount
-	ArchiverHandleRequestLatency
+	ArchiverHandleHistoryRequestLatency
+	ArchiverHandleVisibilityRequestLatency
 	ArchiverUploadWithRetriesLatency
 	ArchiverDeleteWithRetriesLatency
 	ArchiverUploadFailedAllRetriesCount
 	ArchiverUploadSuccessCount
 	ArchiverDeleteFailedAllRetriesCount
 	ArchiverDeleteSuccessCount
+	ArchiverHandleVisibilityFailedAllRetiresCount
+	ArchiverHandleVisibilitySuccessCount
 	ArchiverBacklogSizeGauge
 	ArchiverPumpTimeoutCount
 	ArchiverPumpSignalThresholdCount
@@ -1619,6 +1683,7 @@ var MetricDefs = map[ServiceIdx]map[int]metricDefinition{
 		CadenceErrLimitExceededCounter:                      {metricName: "cadence_errors_limit_exceeded", metricType: Counter},
 		CadenceErrContextTimeoutCounter:                     {metricName: "cadence_errors_context_timeout", metricType: Counter},
 		CadenceErrRetryTaskCounter:                          {metricName: "cadence_errors_retry_task", metricType: Counter},
+		CadenceErrBadBinaryCounter:                          {metricName: "cadence_errors_bad_binary", metricType: Counter},
 		CadenceErrClientVersionNotSupportedCounter:          {metricName: "cadence_errors_client_version_not_supported", metricType: Counter},
 		PersistenceRequests:                                 {metricName: "persistence_requests", metricType: Counter},
 		PersistenceFailures:                                 {metricName: "persistence_errors", metricType: Counter},
@@ -1672,10 +1737,15 @@ var MetricDefs = map[ServiceIdx]map[int]metricDefinition{
 		HistoryArchiverRunningBlobIntegrityCheckCount:             {metricName: "history_archiver_running_blob_integrity_check", metricType: Counter},
 		HistoryArchiverBlobIntegrityCheckFailedCount:              {metricName: "history_archiver_blob_integrity_check_failed", metricType: Counter},
 		HistoryArchiverDuplicateArchivalsCount:                    {metricName: "history_archiver_duplicate_archivals", metricType: Counter},
+		VisibilityArchiverArchiveNonRetryableErrorCount:           {metricName: "visibility_archiver_archive_non_retryable_error", metricType: Counter},
+		VisibilityArchiverArchiveTransientErrorCount:              {metricName: "visibility_archiver_archive_transient_error", metricType: Counter},
+		VisibilityArchiveSuccessCount:                             {metricName: "visibility_archiver_archive_success", metricType: Counter},
 		MatchingClientForwardedCounter:                            {metricName: "forwarded", metricType: Counter},
 		MatchingClientInvalidTaskListName:                         {metricName: "invalid_task_list_name", metricType: Counter},
 	},
-	Frontend: {},
+	Frontend: {
+		DomainReplicationTaskAckLevel: {metricName: "domain_replication_task_ack_level", metricType: Gauge},
+	},
 	History: {
 		TaskRequests:                                      {metricName: "task_requests", metricType: Counter},
 		TaskLatency:                                       {metricName: "task_latency", metricType: Timer},
@@ -1792,8 +1862,10 @@ var MetricDefs = map[ServiceIdx]map[int]metricDefinition{
 		WorkflowTimeoutCount:                              {metricName: "workflow_timeout", metricType: Counter},
 		WorkflowTerminateCount:                            {metricName: "workflow_terminate", metricType: Counter},
 		ArchiverClientSendSignalFailureCount:              {metricName: "archiver_client_send_signal_error", metricType: Counter},
-		ArchiverClientInlineArchiveAttemptCount:           {metricName: "archiver_client_inline_archive_attempt", metricType: Counter},
-		ArchiverClientInlineArchiveFailureCount:           {metricName: "archiver_client_inline_archive_failure", metricType: Counter},
+		ArchiverClientHistoryInlineArchiveAttemptCount:    {metricName: "archiver_client_history_inline_archive_attempt", metricType: Counter},
+		ArchiverClientHistoryInlineArchiveFailureCount:    {metricName: "archiver_client_history_inline_archive_failure", metricType: Counter},
+		ArchiverClientVisibilityInlineArchiveAttemptCount: {metricName: "archiver_client_visibility_inline_archive_attempt", metricType: Counter},
+		ArchiverClientVisibilityInlineArchiveFailureCount: {metricName: "archiver_client_visibility_inline_archive_attempt", metricType: Counter},
 		LastRetrievedMessageID:                            {metricName: "last_retrieved_message_id", metricType: Gauge},
 		LastProcessedMessageID:                            {metricName: "last_processed_message_id", metricType: Gauge},
 		ReplicationTasksApplied:                           {metricName: "replication_tasks_applied", metricType: Counter},
@@ -1802,8 +1874,7 @@ var MetricDefs = map[ServiceIdx]map[int]metricDefinition{
 		ReplicationTasksFetched:                           {metricName: "replication_tasks_fetched", metricType: Timer},
 		ReplicationTasksReturned:                          {metricName: "replication_tasks_returned", metricType: Timer},
 		GetReplicationMessagesForShardLatency:             {metricName: "get_replication_messages_for_shard", metricType: Timer},
-		ArchiveVisibilityAttemptCount:                     {metricName: "archive_visibility_attempt_count", metricType: Counter},
-		ArchiveVisibilityFailedCount:                      {metricName: "archive_visibility_failed_count", metricType: Counter},
+		EventReapplySkippedCount:                          {metricName: "event_reapply_skipped_count", metricType: Counter},
 	},
 	Matching: {
 		PollSuccessCounter:            {metricName: "poll_success"},
@@ -1834,56 +1905,59 @@ var MetricDefs = map[ServiceIdx]map[int]metricDefinition{
 		RemoteToRemoteMatchCounter:    {metricName: "remote_to_remote_matches"},
 	},
 	Worker: {
-		ReplicatorMessages:                     {metricName: "replicator_messages"},
-		ReplicatorFailures:                     {metricName: "replicator_errors"},
-		ReplicatorMessagesDropped:              {metricName: "replicator_messages_dropped"},
-		ReplicatorLatency:                      {metricName: "replicator_latency"},
-		ESProcessorRequests:                    {metricName: "es_processor_requests"},
-		ESProcessorRetries:                     {metricName: "es_processor_retries"},
-		ESProcessorFailures:                    {metricName: "es_processor_errors"},
-		ESProcessorCorruptedData:               {metricName: "es_processor_corrupted_data"},
-		ESProcessorProcessMsgLatency:           {metricName: "es_processor_process_msg_latency", metricType: Timer},
-		IndexProcessorCorruptedData:            {metricName: "index_processor_corrupted_data"},
-		IndexProcessorProcessMsgLatency:        {metricName: "index_processor_process_msg_latency", metricType: Timer},
-		ArchiverNonRetryableErrorCount:         {metricName: "archiver_non_retryable_error"},
-		ArchiverStartedCount:                   {metricName: "archiver_started"},
-		ArchiverStoppedCount:                   {metricName: "archiver_stopped"},
-		ArchiverCoroutineStartedCount:          {metricName: "archiver_coroutine_started"},
-		ArchiverCoroutineStoppedCount:          {metricName: "archiver_coroutine_stopped"},
-		ArchiverHandleRequestLatency:           {metricName: "archiver_handle_request_latency"},
-		ArchiverUploadWithRetriesLatency:       {metricName: "archiver_upload_with_retries_latency"},
-		ArchiverDeleteWithRetriesLatency:       {metricName: "archiver_delete_with_retries_latency"},
-		ArchiverUploadFailedAllRetriesCount:    {metricName: "archiver_upload_failed_all_retries"},
-		ArchiverUploadSuccessCount:             {metricName: "archiver_upload_success"},
-		ArchiverDeleteFailedAllRetriesCount:    {metricName: "archiver_delete_failed_all_retries"},
-		ArchiverDeleteSuccessCount:             {metricName: "archiver_delete_success"},
-		ArchiverBacklogSizeGauge:               {metricName: "archiver_backlog_size"},
-		ArchiverPumpTimeoutCount:               {metricName: "archiver_pump_timeout"},
-		ArchiverPumpSignalThresholdCount:       {metricName: "archiver_pump_signal_threshold"},
-		ArchiverPumpTimeoutWithoutSignalsCount: {metricName: "archiver_pump_timeout_without_signals"},
-		ArchiverPumpSignalChannelClosedCount:   {metricName: "archiver_pump_signal_channel_closed"},
-		ArchiverWorkflowStartedCount:           {metricName: "archiver_workflow_started"},
-		ArchiverNumPumpedRequestsCount:         {metricName: "archiver_num_pumped_requests"},
-		ArchiverNumHandledRequestsCount:        {metricName: "archiver_num_handled_requests"},
-		ArchiverPumpedNotEqualHandledCount:     {metricName: "archiver_pumped_not_equal_handled"},
-		ArchiverHandleAllRequestsLatency:       {metricName: "archiver_handle_all_requests_latency"},
-		ArchiverWorkflowStoppingCount:          {metricName: "archiver_workflow_stopping"},
-		TaskProcessedCount:                     {metricName: "task_processed", metricType: Gauge},
-		TaskDeletedCount:                       {metricName: "task_deleted", metricType: Gauge},
-		TaskListProcessedCount:                 {metricName: "tasklist_processed", metricType: Gauge},
-		TaskListDeletedCount:                   {metricName: "tasklist_deleted", metricType: Gauge},
-		TaskListOutstandingCount:               {metricName: "tasklist_outstanding", metricType: Gauge},
-		StartedCount:                           {metricName: "started", metricType: Counter},
-		StoppedCount:                           {metricName: "stopped", metricType: Counter},
-		ExecutorTasksDeferredCount:             {metricName: "executor_deferred", metricType: Counter},
-		ExecutorTasksDroppedCount:              {metricName: "executor_dropped", metricType: Counter},
-		BatcherProcessorSuccess:                {metricName: "batcher_processor_requests", metricType: Counter},
-		BatcherProcessorFailures:               {metricName: "batcher_processor_errors", metricType: Counter},
-		HistoryScavengerSuccessCount:           {metricName: "scavenger_success", metricType: Counter},
-		HistoryScavengerErrorCount:             {metricName: "scavenger_errors", metricType: Counter},
-		HistoryScavengerSkipCount:              {metricName: "scavenger_skips", metricType: Counter},
-		ParentClosePolicyProcessorSuccess:      {metricName: "parent_close_policy_processor_requests", metricType: Counter},
-		ParentClosePolicyProcessorFailures:     {metricName: "parent_close_policy_processor_errors", metricType: Counter},
+		ReplicatorMessages:                            {metricName: "replicator_messages"},
+		ReplicatorFailures:                            {metricName: "replicator_errors"},
+		ReplicatorMessagesDropped:                     {metricName: "replicator_messages_dropped"},
+		ReplicatorLatency:                             {metricName: "replicator_latency"},
+		ESProcessorRequests:                           {metricName: "es_processor_requests"},
+		ESProcessorRetries:                            {metricName: "es_processor_retries"},
+		ESProcessorFailures:                           {metricName: "es_processor_errors"},
+		ESProcessorCorruptedData:                      {metricName: "es_processor_corrupted_data"},
+		ESProcessorProcessMsgLatency:                  {metricName: "es_processor_process_msg_latency", metricType: Timer},
+		IndexProcessorCorruptedData:                   {metricName: "index_processor_corrupted_data"},
+		IndexProcessorProcessMsgLatency:               {metricName: "index_processor_process_msg_latency", metricType: Timer},
+		ArchiverNonRetryableErrorCount:                {metricName: "archiver_non_retryable_error"},
+		ArchiverStartedCount:                          {metricName: "archiver_started"},
+		ArchiverStoppedCount:                          {metricName: "archiver_stopped"},
+		ArchiverCoroutineStartedCount:                 {metricName: "archiver_coroutine_started"},
+		ArchiverCoroutineStoppedCount:                 {metricName: "archiver_coroutine_stopped"},
+		ArchiverHandleHistoryRequestLatency:           {metricName: "archiver_handle_history_request_latency"},
+		ArchiverHandleVisibilityRequestLatency:        {metricName: "archiver_handle_visibility_request_latency"},
+		ArchiverUploadWithRetriesLatency:              {metricName: "archiver_upload_with_retries_latency"},
+		ArchiverDeleteWithRetriesLatency:              {metricName: "archiver_delete_with_retries_latency"},
+		ArchiverUploadFailedAllRetriesCount:           {metricName: "archiver_upload_failed_all_retries"},
+		ArchiverUploadSuccessCount:                    {metricName: "archiver_upload_success"},
+		ArchiverDeleteFailedAllRetriesCount:           {metricName: "archiver_delete_failed_all_retries"},
+		ArchiverDeleteSuccessCount:                    {metricName: "archiver_delete_success"},
+		ArchiverHandleVisibilityFailedAllRetiresCount: {metricName: "archiver_handle_visibility_failed_all_retries"},
+		ArchiverHandleVisibilitySuccessCount:          {metricName: "archiver_handle_visibility_success"},
+		ArchiverBacklogSizeGauge:                      {metricName: "archiver_backlog_size"},
+		ArchiverPumpTimeoutCount:                      {metricName: "archiver_pump_timeout"},
+		ArchiverPumpSignalThresholdCount:              {metricName: "archiver_pump_signal_threshold"},
+		ArchiverPumpTimeoutWithoutSignalsCount:        {metricName: "archiver_pump_timeout_without_signals"},
+		ArchiverPumpSignalChannelClosedCount:          {metricName: "archiver_pump_signal_channel_closed"},
+		ArchiverWorkflowStartedCount:                  {metricName: "archiver_workflow_started"},
+		ArchiverNumPumpedRequestsCount:                {metricName: "archiver_num_pumped_requests"},
+		ArchiverNumHandledRequestsCount:               {metricName: "archiver_num_handled_requests"},
+		ArchiverPumpedNotEqualHandledCount:            {metricName: "archiver_pumped_not_equal_handled"},
+		ArchiverHandleAllRequestsLatency:              {metricName: "archiver_handle_all_requests_latency"},
+		ArchiverWorkflowStoppingCount:                 {metricName: "archiver_workflow_stopping"},
+		TaskProcessedCount:                            {metricName: "task_processed", metricType: Gauge},
+		TaskDeletedCount:                              {metricName: "task_deleted", metricType: Gauge},
+		TaskListProcessedCount:                        {metricName: "tasklist_processed", metricType: Gauge},
+		TaskListDeletedCount:                          {metricName: "tasklist_deleted", metricType: Gauge},
+		TaskListOutstandingCount:                      {metricName: "tasklist_outstanding", metricType: Gauge},
+		StartedCount:                                  {metricName: "started", metricType: Counter},
+		StoppedCount:                                  {metricName: "stopped", metricType: Counter},
+		ExecutorTasksDeferredCount:                    {metricName: "executor_deferred", metricType: Counter},
+		ExecutorTasksDroppedCount:                     {metricName: "executor_dropped", metricType: Counter},
+		BatcherProcessorSuccess:                       {metricName: "batcher_processor_requests", metricType: Counter},
+		BatcherProcessorFailures:                      {metricName: "batcher_processor_errors", metricType: Counter},
+		HistoryScavengerSuccessCount:                  {metricName: "scavenger_success", metricType: Counter},
+		HistoryScavengerErrorCount:                    {metricName: "scavenger_errors", metricType: Counter},
+		HistoryScavengerSkipCount:                     {metricName: "scavenger_skips", metricType: Counter},
+		ParentClosePolicyProcessorSuccess:             {metricName: "parent_close_policy_processor_requests", metricType: Counter},
+		ParentClosePolicyProcessorFailures:            {metricName: "parent_close_policy_processor_errors", metricType: Counter},
 	},
 }
 

@@ -307,8 +307,8 @@ func (t *timerQueueStandbyProcessorImpl) processActivityTimeout(
 
 	ExpireActivityTimers:
 		for _, td := range tBuilder.GetActivityTimers(msBuilder) {
-			_, isRunning := msBuilder.GetActivityInfo(td.ActivityID)
-			if !isRunning {
+			_, ok := msBuilder.GetActivityInfo(td.ActivityID)
+			if !ok {
 				//  We might have time out this activity already.
 				continue ExpireActivityTimers
 			}
@@ -334,9 +334,12 @@ func (t *timerQueueStandbyProcessorImpl) processActivityTimeout(
 
 		// need to clear the activity heartbeat timer task marks
 		doUpdate := false
-		lastWriteVersion := msBuilder.GetLastWriteVersion()
+		lastWriteVersion, err := msBuilder.GetLastWriteVersion()
+		if err != nil {
+			return err
+		}
 		isHeartBeatTask := timerTask.TimeoutType == int(workflow.TimeoutTypeHeartbeat)
-		if activityInfo, pending := msBuilder.GetActivityInfo(timerTask.EventID); isHeartBeatTask && pending {
+		if activityInfo, ok := msBuilder.GetActivityInfo(timerTask.EventID); isHeartBeatTask && ok {
 			doUpdate = true
 			activityInfo.TimerTaskStatus = activityInfo.TimerTaskStatus &^ TimerTaskStatusCreatedHeartbeat
 			if err := msBuilder.UpdateActivity(activityInfo); err != nil {
@@ -357,10 +360,12 @@ func (t *timerQueueStandbyProcessorImpl) processActivityTimeout(
 		// we need to handcraft some of the variables
 		// since the job being done here is update the activity and possibly write a timer task to DB
 		// also need to reset the current version.
-		msBuilder.UpdateReplicationStateVersion(lastWriteVersion, true)
+		if err := msBuilder.UpdateCurrentVersion(lastWriteVersion, true); err != nil {
+			return err
+		}
 
 		msBuilder.AddTimerTasks(newTimerTasks...)
-		err := context.updateWorkflowExecutionAsPassive(now)
+		err = context.updateWorkflowExecutionAsPassive(now)
 		if err == nil {
 			t.notifyNewTimers(newTimerTasks)
 		}
@@ -486,7 +491,11 @@ func (t *timerQueueStandbyProcessorImpl) processWorkflowTimeout(
 		// we do not need to notity new timer to base, since if there is no new event being replicated
 		// checking again if the timer can be completed is meaningless
 
-		ok, err := verifyTaskVersion(t.shard, t.logger, timerTask.DomainID, msBuilder.GetStartVersion(), timerTask.Version, timerTask)
+		startVersion, err := msBuilder.GetStartVersion()
+		if err != nil {
+			return err
+		}
+		ok, err := verifyTaskVersion(t.shard, t.logger, timerTask.DomainID, startVersion, timerTask.Version, timerTask)
 		if err != nil {
 			return err
 		} else if !ok {
@@ -513,7 +522,7 @@ func (t *timerQueueStandbyProcessorImpl) getTimerBuilder() *timerBuilder {
 	timeSource := clock.NewEventTimeSource()
 	now := t.getStandbyClusterTime()
 	timeSource.Update(now)
-	return newTimerBuilder(t.logger, timeSource)
+	return newTimerBuilder(timeSource)
 }
 
 func (t *timerQueueStandbyProcessorImpl) processTimer(

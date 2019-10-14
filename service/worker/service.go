@@ -21,8 +21,14 @@
 package worker
 
 import (
+	"context"
+	"fmt"
+	"strings"
 	"sync/atomic"
 	"time"
+
+	cshared "go.uber.org/cadence/.gen/go/shared"
+	cclient "go.uber.org/cadence/client"
 
 	"github.com/uber/cadence/.gen/go/shared"
 	"github.com/uber/cadence/common"
@@ -52,10 +58,12 @@ type (
 	// 3. Archiver: Handles archival of workflow histories.
 	Service struct {
 		stopC         chan struct{}
-		isStopped     int32
+		status        int32
 		params        *service.BootstrapParams
 		config        *Config
 		logger        log.Logger
+		metadataMgr   persistence.MetadataManager
+		domainCache   cache.DomainCache
 		metricsClient metrics.Client
 	}
 
@@ -72,7 +80,7 @@ type (
 	}
 )
 
-const domainRefreshInterval = time.Second * 30
+const domainRefreshInterval = time.Second * 11
 
 // NewService builds a new cadence-worker service
 func NewService(params *service.BootstrapParams) common.Daemon {
@@ -137,10 +145,28 @@ func NewConfig(params *service.BootstrapParams) *Config {
 
 // Start is called to start the service
 func (s *Service) Start() {
+	if !atomic.CompareAndSwapInt32(&s.status, common.DaemonStatusInitialized, common.DaemonStatusStarted) {
+		return
+	}
 	base := service.New(s.params)
 	base.Start()
 	s.logger = base.GetLogger()
+
+	pConfig := s.params.PersistenceConfig
+	pConfig.SetMaxQPS(pConfig.DefaultStore, s.config.ReplicationCfg.PersistenceMaxQPS())
+	pFactory := persistencefactory.New(&pConfig, s.params.ClusterMetadata.GetCurrentClusterName(), s.metricsClient, s.logger)
+	s.ensureSystemDomainExists(pFactory, base.GetClusterMetadata().GetCurrentClusterName())
 	s.metricsClient = base.GetMetricsClient()
+
+	metadataMgr, err := pFactory.NewMetadataManager()
+	if err != nil {
+		s.logger.Fatal("failed to start replicator, could not create MetadataManager", tag.Error(err))
+	}
+	s.metadataMgr = metadataMgr
+
+	s.domainCache = cache.NewDomainCache(metadataMgr, base.GetClusterMetadata(), s.metricsClient, s.logger)
+	s.domainCache.Start()
+
 	s.logger.Info("service starting", tag.ComponentWorker)
 
 	if s.config.IndexerCfg != nil {
@@ -152,14 +178,9 @@ func (s *Service) Start() {
 	batcherEnabled := s.config.EnableBatcher()
 	parentClosePolicyEnabled := s.config.EnableParentClosePolicyWorker()
 
-	pConfig := s.params.PersistenceConfig
-	pConfig.SetMaxQPS(pConfig.DefaultStore, s.config.ReplicationCfg.PersistenceMaxQPS())
-	pFactory := persistencefactory.New(&pConfig, s.params.ClusterMetadata.GetCurrentClusterName(), s.metricsClient, s.logger)
-	s.ensureSystemDomainExists(pFactory, base.GetClusterMetadata().GetCurrentClusterName())
-
 	s.startScanner(base)
 	if replicatorEnabled {
-		s.startReplicator(base, pFactory)
+		s.startReplicator(base)
 	}
 	if archiverEnabled {
 		s.startArchiver(base, pFactory)
@@ -178,10 +199,11 @@ func (s *Service) Start() {
 
 // Stop is called to stop the service
 func (s *Service) Stop() {
-	if !atomic.CompareAndSwapInt32(&s.isStopped, 0, 1) {
+	if !atomic.CompareAndSwapInt32(&s.status, common.DaemonStatusStarted, common.DaemonStatusStopped) {
 		return
 	}
 	close(s.stopC)
+	s.domainCache.Stop()
 	s.params.Logger.Info("service stopped", tag.ComponentWorker)
 }
 
@@ -229,23 +251,24 @@ func (s *Service) startScanner(base service.Service) {
 	}
 }
 
-func (s *Service) startReplicator(base service.Service, pFactory persistencefactory.Factory) {
-	metadataV2Mgr, err := pFactory.NewMetadataManager(persistencefactory.MetadataV2)
+func (s *Service) startReplicator(base service.Service) {
+	serviceResolver, err := base.GetMembershipMonitor().GetResolver(common.WorkerServiceName)
 	if err != nil {
-		s.logger.Fatal("failed to start replicator, could not create MetadataManager", tag.Error(err))
+		s.logger.Fatal("failed to get service resolver", tag.Error(err))
 	}
-	domainCache := cache.NewDomainCache(metadataV2Mgr, base.GetClusterMetadata(), s.metricsClient, s.logger)
-	domainCache.Start()
 
 	replicator := replicator.NewReplicator(
 		base.GetClusterMetadata(),
-		metadataV2Mgr,
-		domainCache,
+		s.metadataMgr,
+		s.domainCache,
 		base.GetClientBean(),
 		s.config.ReplicationCfg,
 		base.GetMessagingClient(),
 		s.logger,
-		s.metricsClient)
+		s.metricsClient,
+		base.GetHostInfo(),
+		serviceResolver,
+	)
 	if err := replicator.Start(); err != nil {
 		replicator.Stop()
 		s.logger.Fatal("fail to start replicator", tag.Error(err))
@@ -269,30 +292,26 @@ func (s *Service) startIndexer(base service.Service) {
 func (s *Service) startArchiver(base service.Service, pFactory persistencefactory.Factory) {
 	publicClient := s.params.PublicClient
 
-	historyManager, err := pFactory.NewHistoryManager()
-	if err != nil {
-		s.logger.Fatal("failed to start archiver, could not create HistoryManager", tag.Error(err))
-	}
 	historyV2Manager, err := pFactory.NewHistoryV2Manager()
 	if err != nil {
 		s.logger.Fatal("failed to start archiver, could not create HistoryV2Manager", tag.Error(err))
 	}
-	metadataMgr, err := pFactory.NewMetadataManager(persistencefactory.MetadataV1V2)
-	if err != nil {
-		s.logger.Fatal("failed to start archiver, could not create MetadataManager", tag.Error(err))
-	}
-	domainCache := cache.NewDomainCache(metadataMgr, s.params.ClusterMetadata, s.metricsClient, s.logger)
-	domainCache.Start()
+
 	historyArchiverBootstrapContainer := &carchiver.HistoryBootstrapContainer{
-		HistoryManager:   historyManager,
 		HistoryV2Manager: historyV2Manager,
 		Logger:           s.logger,
 		MetricsClient:    s.metricsClient,
 		ClusterMetadata:  base.GetClusterMetadata(),
-		DomainCache:      domainCache,
+		DomainCache:      s.domainCache,
+	}
+	visibilityArchiverBootstrapContainer := &carchiver.VisibilityBootstrapContainer{
+		Logger:          s.logger,
+		MetricsClient:   s.metricsClient,
+		ClusterMetadata: base.GetClusterMetadata(),
+		DomainCache:     s.domainCache,
 	}
 	archiverProvider := base.GetArchiverProvider()
-	err = archiverProvider.RegisterBootstrapContainer(common.WorkerServiceName, historyArchiverBootstrapContainer, &carchiver.VisibilityBootstrapContainer{})
+	err = archiverProvider.RegisterBootstrapContainer(common.WorkerServiceName, historyArchiverBootstrapContainer, visibilityArchiverBootstrapContainer)
 	if err != nil {
 		s.logger.Fatal("failed to register archiver bootstrap container", tag.Error(err))
 	}
@@ -301,9 +320,8 @@ func (s *Service) startArchiver(base service.Service, pFactory persistencefactor
 		PublicClient:     publicClient,
 		MetricsClient:    s.metricsClient,
 		Logger:           s.logger,
-		HistoryManager:   historyManager,
 		HistoryV2Manager: historyV2Manager,
-		DomainCache:      domainCache,
+		DomainCache:      s.domainCache,
 		Config:           s.config.ArchiverConfig,
 		ArchiverProvider: archiverProvider,
 	}
@@ -315,25 +333,47 @@ func (s *Service) startArchiver(base service.Service, pFactory persistencefactor
 }
 
 func (s *Service) ensureSystemDomainExists(pFactory persistencefactory.Factory, clusterName string) {
-	metadataProxy, err := pFactory.NewMetadataManager(persistencefactory.MetadataV1V2)
+	metadataProxy, err := pFactory.NewMetadataManager()
 	if err != nil {
 		s.logger.Fatal("error creating metadataMgr proxy", tag.Error(err))
 	}
 	defer metadataProxy.Close()
 	_, err = metadataProxy.GetDomain(&persistence.GetDomainRequest{Name: common.SystemLocalDomainName})
-	switch err.(type) {
-	case nil:
-		return
-	case *shared.EntityNotExistsError:
-		s.logger.Info("cadence-system domain does not exist, attempting to register domain")
-		s.registerSystemDomain(pFactory, clusterName)
-	default:
+	if err == nil {
+		s.ensureDomainAvailable()
+	} else {
+		if _, ok := err.(*shared.EntityNotExistsError); ok {
+			s.logger.Info("cadence-system domain does not exist, attempting to register domain")
+			s.registerSystemDomain(pFactory, clusterName)
+		}
 		s.logger.Fatal("failed to verify if cadence system domain exists", tag.Error(err))
 	}
 }
 
+func (s *Service) ensureDomainAvailable() {
+	client := cclient.NewClient(s.params.PublicClient, common.SystemLocalDomainName, &cclient.Options{})
+	// Use TerminateWorkflow to check whether domain is refreshed in cache or not
+	err := client.TerminateWorkflow(context.Background(), "wid-not-exist", "", "test reason", nil)
+	retryCount := 0
+	for err != nil && retryCount <= 10 {
+		nonExistErr, ok := err.(*cshared.EntityNotExistsError)
+		if ok && isErrSystemDomainNotExist(nonExistErr) {
+			s.logger.Info(fmt.Sprintf("cadence-system domain is not ready, waiting %v for domain refresh", domainRefreshInterval), tag.Attempt(int32(retryCount)))
+			time.Sleep(domainRefreshInterval)
+			err = client.TerminateWorkflow(context.Background(), "wid-not-exist", "", "test reason", nil)
+			retryCount++
+		} else {
+			break
+		}
+	}
+}
+
+func isErrSystemDomainNotExist(err *cshared.EntityNotExistsError) bool {
+	return strings.Contains(err.Message, common.SystemLocalDomainName)
+}
+
 func (s *Service) registerSystemDomain(pFactory persistencefactory.Factory, clusterName string) {
-	metadataV2, err := pFactory.NewMetadataManager(persistencefactory.MetadataV2)
+	metadataV2, err := pFactory.NewMetadataManager()
 	if err != nil {
 		s.logger.Fatal("error creating metadataV2Mgr", tag.Error(err))
 	}

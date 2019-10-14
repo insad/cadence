@@ -22,6 +22,7 @@ package sqldb
 
 import (
 	"database/sql"
+	"github.com/uber/cadence/common"
 	"time"
 )
 
@@ -85,14 +86,16 @@ type (
 
 	// ExecutionsRow represents a row in executions table
 	ExecutionsRow struct {
-		ShardID          int
-		DomainID         UUID
-		WorkflowID       string
-		RunID            UUID
-		NextEventID      int64
-		LastWriteVersion int64
-		Data             []byte
-		DataEncoding     string
+		ShardID                  int
+		DomainID                 UUID
+		WorkflowID               string
+		RunID                    UUID
+		NextEventID              int64
+		LastWriteVersion         int64
+		Data                     []byte
+		DataEncoding             string
+		VersionHistories         []byte
+		VersionHistoriesEncoding string
 	}
 
 	// ExecutionsFilter contains the column names within domain table that
@@ -278,9 +281,7 @@ type (
 		MinNodeID *int64
 		// Exclusive
 		MaxNodeID *int64
-		// Exclusive
-		MinTxnID *int64
-		PageSize *int
+		PageSize  *int
 	}
 
 	// HistoryTreeRow represents a row in history_tree table
@@ -458,9 +459,15 @@ type (
 
 	// QueueRow represents a row in queue table
 	QueueRow struct {
-		QueueType      int
+		QueueType      common.QueueType
 		MessageID      int
 		MessagePayload []byte
+	}
+
+	// QueueMetadataRow represents a row in queue_metadata table
+	QueueMetadataRow struct {
+		QueueType common.QueueType
+		Data      []byte
 	}
 
 	// tableCRUD defines the API for interacting with the database tables
@@ -507,13 +514,6 @@ type (
 		SelectFromTaskLists(filter *TaskListsFilter) ([]TaskListsRow, error)
 		DeleteFromTaskLists(filter *TaskListsFilter) (sql.Result, error)
 		LockTaskLists(filter *TaskListsFilter) (int64, error)
-
-		// eventsV1: will be deprecated in favor of eventsV2
-		InsertIntoEvents(row *EventsRow) (sql.Result, error)
-		UpdateEvents(rows *EventsRow) (sql.Result, error)
-		SelectFromEvents(filter *EventsFilter) ([]EventsRow, error)
-		DeleteFromEvents(filter *EventsFilter) (sql.Result, error)
-		LockEvents(filter *EventsFilter) (*EventsRow, error)
 
 		// eventsV2
 		InsertIntoHistoryNode(row *HistoryNodeRow) (sql.Result, error)
@@ -654,8 +654,12 @@ type (
 		DeleteFromVisibility(filter *VisibilityFilter) (sql.Result, error)
 
 		InsertIntoQueue(row *QueueRow) (sql.Result, error)
-		GetLastEnqueuedMessageIDForUpdate(queueType int) (int, error)
-		GetMessagesFromQueue(queueType, lastMessageID, maxRows int) ([]QueueRow, error)
+		GetLastEnqueuedMessageIDForUpdate(queueType common.QueueType) (int, error)
+		GetMessagesFromQueue(queueType common.QueueType, lastMessageID, maxRows int) ([]QueueRow, error)
+		DeleteMessagesBefore(queueType common.QueueType, messageID int) (sql.Result, error)
+		InsertAckLevel(queueType common.QueueType, messageID int, clusterName string) error
+		UpdateAckLevels(queueType common.QueueType, clusterAckLevels map[string]int) error
+		GetAckLevels(queueType common.QueueType, forUpdate bool) (map[string]int, error)
 	}
 
 	// Tx defines the API for a SQL transaction

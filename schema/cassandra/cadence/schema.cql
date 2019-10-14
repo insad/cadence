@@ -326,26 +326,9 @@ CREATE TABLE executions (
   buffered_replication_tasks_map map<bigint, frozen<buffered_replication_task_info>>,
   workflow_last_write_version    bigint,
   workflow_state                 int,
+  version_histories              blob, -- the metadata of history branching
+  version_histories_encoding     text,
   PRIMARY KEY  (shard_id, type, domain_id, workflow_id, run_id, visibility_ts, task_id)
-) WITH COMPACTION = {
-    'class': 'org.apache.cassandra.db.compaction.LeveledCompactionStrategy'
-  };
-
--- events table is deprecated in favor of v2 tables: history_node/history_tree
-CREATE TABLE events (
-  domain_id           uuid,
-  workflow_id         text,
-  run_id              uuid,
-  -- We insert a batch of events with each append transaction.
-  -- This field stores the event id of first event in the batch.
-  first_event_id      bigint,
-  event_batch_version bigint,
-  range_id            bigint,
-  tx_id               bigint,
-  data                blob, -- Batch of workflow execution history events as a blob
-  data_encoding       text, -- Protocol used for history serialization
-  data_version        int,  -- history blob version
-  PRIMARY KEY ((domain_id, workflow_id, run_id), first_event_id)
 ) WITH COMPACTION = {
     'class': 'org.apache.cassandra.db.compaction.LeveledCompactionStrategy'
   };
@@ -400,20 +383,6 @@ CREATE TABLE domains (
     'class': 'org.apache.cassandra.db.compaction.LeveledCompactionStrategy'
   };
 
-CREATE TABLE domains_by_name (
-  name               text,
-  domain             frozen<domain>,
-  config             frozen<domain_config>,
-  replication_config frozen<domain_replication_config>, -- indicating active cluster and standby cluster used for replication
-  is_global_domain   boolean, -- indicating whether a domain is a global domain
-  config_version     bigint, -- indicating the version of domain config, excluding the failover / change of active cluster name
-  failover_version   bigint, -- indicating the version of active domain only, used for domain failover
-  db_version         bigint, -- indicate the version of the record, used for update
-  PRIMARY KEY (name)
-)  WITH COMPACTION = {
-     'class': 'org.apache.cassandra.db.compaction.LeveledCompactionStrategy'
-   };
-
 CREATE TABLE domains_by_name_v2 (
   domains_partition             int,
   name                          text,
@@ -430,11 +399,18 @@ CREATE TABLE domains_by_name_v2 (
      'class': 'org.apache.cassandra.db.compaction.LeveledCompactionStrategy'
    };
 
-INSERT INTO domains_by_name (
+INSERT INTO domains_by_name_v2 (
+   domains_partition,
    name,
    domain,
-   config
+   config,
+   is_global_domain,
+   config_version,
+   failover_version,
+   failover_notification_version,
+   notification_version
 ) VALUES (
+   0,
    'cadence-system',
    {
        id: 32049b68-7872-4094-8e63-d0dd59896a83,
@@ -445,7 +421,12 @@ INSERT INTO domains_by_name (
    {
        retention:3,
        emit_metric:False
-   }
+   },
+   False,
+   0,
+   -24,
+   -1,
+   -1
 ) IF NOT EXISTS;
 
 INSERT INTO domains (
@@ -466,3 +447,12 @@ CREATE TABLE queue (
 ) WITH COMPACTION = {
     'class': 'org.apache.cassandra.db.compaction.LeveledCompactionStrategy'
   };
+
+CREATE TABLE queue_metadata (
+  queue_type        int,
+  cluster_ack_level map<text, bigint>,
+  version           bigint,
+PRIMARY KEY (queue_type)
+)  WITH COMPACTION = {
+     'class': 'org.apache.cassandra.db.compaction.LeveledCompactionStrategy'
+   };

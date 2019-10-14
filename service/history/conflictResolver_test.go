@@ -51,12 +51,10 @@ type (
 		logger                   log.Logger
 		mockCtrl                 *gomock.Controller
 		mockExecutionMgr         *mocks.ExecutionManager
-		mockHistoryMgr           *mocks.HistoryManager
 		mockHistoryV2Mgr         *mocks.HistoryV2Manager
 		mockShardManager         *mocks.ShardManager
 		mockClusterMetadata      *mocks.ClusterMetadata
 		mockProducer             *mocks.KafkaProducer
-		mockMetadataMgr          *mocks.MetadataManager
 		mockMessagingClient      messaging.Client
 		mockService              service.Service
 		mockShard                *shardContextImpl
@@ -87,17 +85,22 @@ func (s *conflictResolverSuite) TearDownSuite() {
 func (s *conflictResolverSuite) SetupTest() {
 	s.logger = loggerimpl.NewDevelopmentForTest(s.Suite)
 	s.mockCtrl = gomock.NewController(s.T())
-	s.mockHistoryMgr = &mocks.HistoryManager{}
 	s.mockHistoryV2Mgr = &mocks.HistoryV2Manager{}
 	s.mockExecutionMgr = &mocks.ExecutionManager{}
 	s.mockClusterMetadata = &mocks.ClusterMetadata{}
 	s.mockShardManager = &mocks.ShardManager{}
 	s.mockProducer = &mocks.KafkaProducer{}
 	s.mockMessagingClient = mocks.NewMockMessagingClient(s.mockProducer, nil)
-	s.mockMetadataMgr = &mocks.MetadataManager{}
 	metricsClient := metrics.NewClient(tally.NoopScope, metrics.History)
 	s.mockClientBean = &client.MockClientBean{}
-	s.mockService = service.NewTestService(s.mockClusterMetadata, s.mockMessagingClient, metricsClient, s.mockClientBean, nil, nil)
+	s.mockService = service.NewTestService(
+		s.mockClusterMetadata,
+		s.mockMessagingClient,
+		metricsClient,
+		s.mockClientBean,
+		nil,
+		nil,
+		nil)
 	s.mockDomainCache = &cache.DomainCacheMock{}
 	s.mockEventsCache = &MockEventsCache{}
 
@@ -107,7 +110,6 @@ func (s *conflictResolverSuite) SetupTest() {
 		transferSequenceNumber:    1,
 		executionManager:          s.mockExecutionMgr,
 		shardManager:              s.mockShardManager,
-		historyMgr:                s.mockHistoryMgr,
 		clusterMetadata:           s.mockClusterMetadata,
 		maxTransferSequenceNumber: 100000,
 		closeCh:                   make(chan int, 100),
@@ -136,91 +138,25 @@ func (s *conflictResolverSuite) SetupTest() {
 	}
 	s.mockShard.SetEngine(h)
 
-	s.mockContext = newWorkflowExecutionContext(validDomainID, shared.WorkflowExecution{
+	s.mockContext = newWorkflowExecutionContext(testDomainID, shared.WorkflowExecution{
 		WorkflowId: common.StringPtr("some random workflow ID"),
-		RunId:      common.StringPtr(validRunID),
+		RunId:      common.StringPtr(testRunID),
 	}, s.mockShard, s.mockExecutionMgr, s.logger)
-	s.conflictResolver = newConflictResolver(s.mockShard, s.mockContext, s.mockHistoryMgr, s.mockHistoryV2Mgr, s.logger)
+	s.conflictResolver = newConflictResolver(s.mockShard, s.mockContext, s.mockHistoryV2Mgr, s.logger)
 
 }
 
 func (s *conflictResolverSuite) TearDownTest() {
 	s.mockCtrl.Finish()
-	s.mockHistoryMgr.AssertExpectations(s.T())
 	s.mockHistoryV2Mgr.AssertExpectations(s.T())
 	s.mockExecutionMgr.AssertExpectations(s.T())
 	s.mockShardManager.AssertExpectations(s.T())
 	s.mockProducer.AssertExpectations(s.T())
-	s.mockMetadataMgr.AssertExpectations(s.T())
 	s.mockClientBean.AssertExpectations(s.T())
 	s.mockDomainCache.AssertExpectations(s.T())
 	s.mockEventsCache.AssertExpectations(s.T())
 	s.mockTxProcessor.AssertExpectations(s.T())
 	s.mockTimerProcessor.AssertExpectations(s.T())
-}
-
-func (s *conflictResolverSuite) TestGetHistory() {
-	domainID := s.mockContext.domainID
-	execution := s.mockContext.workflowExecution
-	nextEventID := int64(101)
-
-	event1 := &shared.HistoryEvent{
-		EventId:                                 common.Int64Ptr(1),
-		WorkflowExecutionStartedEventAttributes: &shared.WorkflowExecutionStartedEventAttributes{},
-	}
-	event2 := &shared.HistoryEvent{
-		EventId:                              common.Int64Ptr(2),
-		DecisionTaskScheduledEventAttributes: &shared.DecisionTaskScheduledEventAttributes{},
-	}
-	event3 := &shared.HistoryEvent{
-		EventId:                            common.Int64Ptr(3),
-		DecisionTaskStartedEventAttributes: &shared.DecisionTaskStartedEventAttributes{},
-	}
-	event4 := &shared.HistoryEvent{
-		EventId:                              common.Int64Ptr(4),
-		DecisionTaskCompletedEventAttributes: &shared.DecisionTaskCompletedEventAttributes{},
-	}
-	event5 := &shared.HistoryEvent{
-		EventId:                              common.Int64Ptr(5),
-		ActivityTaskScheduledEventAttributes: &shared.ActivityTaskScheduledEventAttributes{},
-	}
-
-	pageToken := []byte("some random token")
-	s.mockHistoryMgr.On("GetWorkflowExecutionHistory", &persistence.GetWorkflowExecutionHistoryRequest{
-		DomainID:      domainID,
-		Execution:     execution,
-		FirstEventID:  common.FirstEventID,
-		NextEventID:   nextEventID,
-		PageSize:      defaultHistoryPageSize,
-		NextPageToken: nil,
-	}).Return(&persistence.GetWorkflowExecutionHistoryResponse{
-		History:          &shared.History{Events: []*shared.HistoryEvent{event1, event2}},
-		NextPageToken:    pageToken,
-		LastFirstEventID: event1.GetEventId(),
-	}, nil)
-	history, _, firstEventID, token, err := s.conflictResolver.getHistory(domainID, execution, common.FirstEventID, nextEventID, nil, 0, nil)
-	s.Nil(err)
-	s.Equal(history, []*shared.HistoryEvent{event1, event2})
-	s.Equal(pageToken, token)
-	s.Equal(firstEventID, event1.GetEventId())
-
-	s.mockHistoryMgr.On("GetWorkflowExecutionHistory", &persistence.GetWorkflowExecutionHistoryRequest{
-		DomainID:      domainID,
-		Execution:     execution,
-		FirstEventID:  common.FirstEventID,
-		NextEventID:   nextEventID,
-		PageSize:      defaultHistoryPageSize,
-		NextPageToken: pageToken,
-	}).Return(&persistence.GetWorkflowExecutionHistoryResponse{
-		History:          &shared.History{Events: []*shared.HistoryEvent{event3, event4, event5}},
-		NextPageToken:    nil,
-		LastFirstEventID: event4.GetEventId(),
-	}, nil)
-	history, _, firstEventID, token, err = s.conflictResolver.getHistory(domainID, execution, common.FirstEventID, nextEventID, token, 0, nil)
-	s.Nil(err)
-	s.Equal(history, []*shared.HistoryEvent{event3, event4, event5})
-	s.Empty(token)
-	s.Equal(firstEventID, event4.GetEventId())
 }
 
 func (s *conflictResolverSuite) TestReset() {
@@ -238,7 +174,6 @@ func (s *conflictResolverSuite) TestReset() {
 	execution := s.mockContext.workflowExecution
 	nextEventID := int64(2)
 	branchToken := []byte("some random branch token")
-	eventStoreVersion := int32(persistence.EventStoreVersionV2)
 
 	event1 := &shared.HistoryEvent{
 		EventId: common.Int64Ptr(1),
@@ -303,7 +238,6 @@ func (s *conflictResolverSuite) TestReset() {
 		DecisionStartedTimestamp: 0,
 		CreateRequestID:          createRequestID,
 		BranchToken:              branchToken,
-		EventStoreVersion:        eventStoreVersion,
 	}
 	// this is only a shallow test, meaning
 	// the mutable state only has the minimal information
@@ -317,10 +251,12 @@ func (s *conflictResolverSuite) TestReset() {
 		input.ResetWorkflowSnapshot.TransferTasks = nil
 
 		s.Equal(&persistence.ConflictResolveWorkflowExecutionRequest{
-			RangeID:              s.mockShard.shardInfo.RangeID,
-			PrevRunID:            prevRunID,
-			PrevLastWriteVersion: prevLastWriteVersion,
-			PrevState:            prevState,
+			RangeID: s.mockShard.shardInfo.RangeID,
+			CurrentWorkflowCAS: &persistence.CurrentWorkflowCAS{
+				PrevRunID:            prevRunID,
+				PrevLastWriteVersion: prevLastWriteVersion,
+				PrevState:            prevState,
+			},
 			ResetWorkflowSnapshot: persistence.WorkflowSnapshot{
 				ExecutionInfo: executionInfo,
 				ExecutionStats: &persistence.ExecutionStats{

@@ -44,13 +44,10 @@ type (
 		NewTaskManager() (p.TaskManager, error)
 		// NewShardManager returns a new shard manager
 		NewShardManager() (p.ShardManager, error)
-		// NewHistoryManager returns a new history manager
-		NewHistoryManager() (p.HistoryManager, error)
-		// NewHistoryManager returns a new historyV2 manager
+		// NewHistoryV2Manager returns a new historyV2 manager
 		NewHistoryV2Manager() (p.HistoryV2Manager, error)
-		// NewMetadataManager returns a new metadata manager that can speak
-		// the given version or versions
-		NewMetadataManager(version MetadataVersion) (p.MetadataManager, error)
+		// NewMetadataManager returns a new metadata manager
+		NewMetadataManager() (p.MetadataManager, error)
 		// NewExecutionManager returns a new execution manager for a given shardID
 		NewExecutionManager(shardID int) (p.ExecutionManager, error)
 		// NewVisibilityManager returns a new visibility manager
@@ -67,21 +64,15 @@ type (
 		NewTaskStore() (p.TaskStore, error)
 		// NewShardStore returns a new shard store
 		NewShardStore() (p.ShardStore, error)
-		// NewHistoryStore returns a new history store
-		NewHistoryStore() (p.HistoryStore, error)
 		// NewHistoryV2Store returns a new historyV2 store
 		NewHistoryV2Store() (p.HistoryV2Store, error)
 		// NewMetadataStore returns a new metadata store
 		NewMetadataStore() (p.MetadataStore, error)
-		// NewMetadataStoreV1 returns a metadata store that can talk v1
-		NewMetadataStoreV1() (p.MetadataStore, error)
-		// NewMetadataStoreV2 returns a metadata store that can talk v2
-		NewMetadataStoreV2() (p.MetadataStore, error)
 		// NewExecutionStore returns an execution store for given shardID
 		NewExecutionStore(shardID int) (p.ExecutionStore, error)
 		// NewVisibilityStore returns a new visibility store
 		NewVisibilityStore() (p.VisibilityStore, error)
-		NewQueue(queueType int) (p.Queue, error)
+		NewQueue(queueType common.QueueType) (p.Queue, error)
 	}
 	// Datastore represents a datastore
 	Datastore struct {
@@ -94,12 +85,10 @@ type (
 		metricsClient metrics.Client
 		logger        log.Logger
 		datastores    map[storeType]Datastore
+		clusterName   string
 	}
 
 	storeType int
-
-	// MetadataVersion refers to the metadata schema version
-	MetadataVersion int
 )
 
 const (
@@ -110,15 +99,6 @@ const (
 	storeTypeExecution
 	storeTypeVisibility
 	storeTypeQueue
-)
-
-const (
-	// MetadataV1 refers to metadata schema version 1
-	MetadataV1 MetadataVersion = iota + 1
-	// MetadataV2 refers to metadata schema version 2
-	MetadataV2
-	// MetadataV1V2 refers to metadata schema versions 1 and 2
-	MetadataV1V2
 )
 
 var storeTypes = []storeType{
@@ -148,6 +128,7 @@ func New(
 		config:        cfg,
 		metricsClient: metricsClient,
 		logger:        logger,
+		clusterName:   clusterName,
 	}
 	limiters := buildRatelimiters(cfg)
 	factory.init(clusterName, limiters)
@@ -187,23 +168,6 @@ func (f *factoryImpl) NewShardManager() (p.ShardManager, error) {
 }
 
 // NewHistoryManager returns a new history manager
-func (f *factoryImpl) NewHistoryManager() (p.HistoryManager, error) {
-	ds := f.datastores[storeTypeHistory]
-	store, err := ds.factory.NewHistoryStore()
-	if err != nil {
-		return nil, err
-	}
-	result := p.NewHistoryManagerImpl(store, f.logger, f.config.TransactionSizeLimit)
-	if ds.ratelimit != nil {
-		result = p.NewHistoryPersistenceRateLimitedClient(result, ds.ratelimit, f.logger)
-	}
-	if f.metricsClient != nil {
-		result = p.NewHistoryPersistenceMetricsClient(result, f.metricsClient, f.logger)
-	}
-	return result, nil
-}
-
-// NewHistoryManager returns a new history manager
 func (f *factoryImpl) NewHistoryV2Manager() (p.HistoryV2Manager, error) {
 	ds := f.datastores[storeTypeHistory]
 	store, err := ds.factory.NewHistoryV2Store()
@@ -221,19 +185,11 @@ func (f *factoryImpl) NewHistoryV2Manager() (p.HistoryV2Manager, error) {
 }
 
 // NewMetadataManager returns a new metadata manager
-func (f *factoryImpl) NewMetadataManager(version MetadataVersion) (p.MetadataManager, error) {
+func (f *factoryImpl) NewMetadataManager() (p.MetadataManager, error) {
 	var err error
 	var store p.MetadataStore
 	ds := f.datastores[storeTypeMetadata]
-	switch version {
-	case MetadataV1:
-		store, err = ds.factory.NewMetadataStoreV1()
-	case MetadataV2:
-		store, err = ds.factory.NewMetadataStoreV2()
-	default:
-		store, err = ds.factory.NewMetadataStore()
-	}
-
+	store, err = ds.factory.NewMetadataStore()
 	if err != nil {
 		return nil, err
 	}
@@ -304,7 +260,7 @@ func (f *factoryImpl) NewDomainReplicationQueue() (p.DomainReplicationQueue, err
 		result = p.NewQueuePersistenceMetricsClient(result, f.metricsClient, f.logger)
 	}
 
-	return p.NewDomainReplicationQueue(result), nil
+	return p.NewDomainReplicationQueue(result, f.clusterName, f.metricsClient, f.logger), nil
 }
 
 // Close closes this factory

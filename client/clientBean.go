@@ -18,6 +18,8 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 // THE SOFTWARE.
 
+//go:generate mockgen -copyright_file ../LICENSE -package $GOPACKAGE -source $GOFILE -destination clientBean_mock.go -self_package github.com/uber/cadence/client
+
 package client
 
 import (
@@ -29,6 +31,12 @@ import (
 	"sync/atomic"
 	"time"
 
+	"go.uber.org/yarpc"
+	"go.uber.org/yarpc/api/peer"
+	"go.uber.org/yarpc/api/transport"
+	"go.uber.org/yarpc/peer/roundrobin"
+	"go.uber.org/yarpc/transport/tchannel"
+
 	"github.com/uber/cadence/client/admin"
 	"github.com/uber/cadence/client/frontend"
 	"github.com/uber/cadence/client/history"
@@ -36,11 +44,6 @@ import (
 	"github.com/uber/cadence/common/cluster"
 	"github.com/uber/cadence/common/log"
 	"github.com/uber/cadence/common/log/tag"
-	"go.uber.org/yarpc"
-	"go.uber.org/yarpc/api/peer"
-	"go.uber.org/yarpc/api/transport"
-	"go.uber.org/yarpc/peer/roundrobin"
-	"go.uber.org/yarpc/transport/tchannel"
 )
 
 const (
@@ -110,6 +113,10 @@ func NewClientBean(factory Factory, dispatcherProvider DispatcherProvider, clust
 	remoteAdminClients := map[string]admin.Client{}
 	remoteFrontendClients := map[string]frontend.Client{}
 	for clusterName, info := range clusterMetadata.GetAllClusterInfo() {
+		if !info.Enabled {
+			continue
+		}
+
 		dispatcher, err := dispatcherProvider.Get(info.RPCName, info.RPCAddress)
 		if err != nil {
 			return nil, err

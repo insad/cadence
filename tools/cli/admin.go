@@ -43,14 +43,16 @@ func newAdminWorkflowCommands() []cli.Command {
 					Usage: "output file",
 				},
 
-				// for cassandra connection
+				// for persistence connection
+				// TODO need to support other database: https://github.com/uber/cadence/issues/2777
 				cli.StringFlag{
-					Name:  FlagAddress,
-					Usage: "cassandra host address",
+					Name:  FlagDBAddress,
+					Usage: "persistence address(right now only cassandra is supported)",
 				},
 				cli.IntFlag{
-					Name:  FlagPort,
-					Usage: "cassandra port for the host (default is 9042)",
+					Name:  FlagDBPort,
+					Value: 9042,
+					Usage: "persistence port",
 				},
 				cli.StringFlag{
 					Name:  FlagUsername,
@@ -63,6 +65,26 @@ func newAdminWorkflowCommands() []cli.Command {
 				cli.StringFlag{
 					Name:  FlagKeyspace,
 					Usage: "cassandra keyspace",
+				},
+				cli.BoolFlag{
+					Name:  FlagEnableTLS,
+					Usage: "enable TLS over cassandra connection",
+				},
+				cli.StringFlag{
+					Name:  FlagTLSCertPath,
+					Usage: "cassandra tls client cert path (tls must be enabled)",
+				},
+				cli.StringFlag{
+					Name:  FlagTLSKeyPath,
+					Usage: "cassandra tls client key path (tls must be enabled)",
+				},
+				cli.StringFlag{
+					Name:  FlagTLSCaPath,
+					Usage: "cassandra tls client ca path (tls must be enabled)",
+				},
+				cli.BoolFlag{
+					Name:  FlagTLSEnableHostVerification,
+					Usage: "cassandra tls verify hostname and server cert (tls must be enabled)",
 				},
 
 				// support mysql query
@@ -94,6 +116,24 @@ func newAdminWorkflowCommands() []cli.Command {
 			},
 		},
 		{
+			Name:    "refresh-tasks",
+			Aliases: []string{"rt"},
+			Usage:   "Refreshes all the tasks of a workflow",
+			Flags: []cli.Flag{
+				cli.StringFlag{
+					Name:  FlagWorkflowIDWithAlias,
+					Usage: "WorkflowID",
+				},
+				cli.StringFlag{
+					Name:  FlagRunIDWithAlias,
+					Usage: "RunID",
+				},
+			},
+			Action: func(c *cli.Context) {
+				AdminRefreshWorkflowTasks(c)
+			},
+		},
+		{
 			Name:    "delete",
 			Aliases: []string{"del"},
 			Usage:   "Delete current workflow execution and the mutableState record",
@@ -111,15 +151,16 @@ func newAdminWorkflowCommands() []cli.Command {
 					Usage: "skip errors when deleting history",
 				},
 
-				// for cassandra connection
+				// for persistence connection
+				// TODO need to support other database: https://github.com/uber/cadence/issues/2777
 				cli.StringFlag{
-					Name:  FlagAddress,
-					Usage: "cassandra host address",
+					Name:  FlagDBAddress,
+					Usage: "persistence address(right now only cassandra is supported)",
 				},
 				cli.IntFlag{
-					Name:  FlagPort,
+					Name:  FlagDBPort,
 					Value: 9042,
-					Usage: "cassandra port for the host",
+					Usage: "persistence port",
 				},
 				cli.StringFlag{
 					Name:  FlagUsername,
@@ -132,6 +173,26 @@ func newAdminWorkflowCommands() []cli.Command {
 				cli.StringFlag{
 					Name:  FlagKeyspace,
 					Usage: "cassandra keyspace",
+				},
+				cli.BoolFlag{
+					Name:  FlagEnableTLS,
+					Usage: "use TLS over cassandra connection",
+				},
+				cli.StringFlag{
+					Name:  FlagTLSCertPath,
+					Usage: "cassandra tls client cert path (tls must be enabled)",
+				},
+				cli.StringFlag{
+					Name:  FlagTLSKeyPath,
+					Usage: "cassandra tls client key path (tls must be enabled)",
+				},
+				cli.StringFlag{
+					Name:  FlagTLSCaPath,
+					Usage: "cassandra tls client ca path (tls must be enabled)",
+				},
+				cli.BoolFlag{
+					Name:  FlagTLSEnableHostVerification,
+					Usage: "cassandra tls verify hostname and server cert (tls must be enabled)",
 				},
 			},
 			Action: func(c *cli.Context) {
@@ -274,14 +335,16 @@ func newAdminDomainCommands() []cli.Command {
 					Usage: "Domain ID(uuid)",
 				},
 
-				// for cassandra connection
+				// for persistence connection
+				// TODO need to support other database: https://github.com/uber/cadence/issues/2777
 				cli.StringFlag{
-					Name:  FlagAddress,
-					Usage: "cassandra host address",
+					Name:  FlagDBAddress,
+					Usage: "persistence address(right now only cassandra is supported)",
 				},
 				cli.IntFlag{
-					Name:  FlagPort,
-					Usage: "cassandra port for the host (default is 9042)",
+					Name:  FlagDBPort,
+					Value: 9042,
+					Usage: "persistence port",
 				},
 				cli.StringFlag{
 					Name:  FlagUsername,
@@ -294,6 +357,26 @@ func newAdminDomainCommands() []cli.Command {
 				cli.StringFlag{
 					Name:  FlagKeyspace,
 					Usage: "cassandra keyspace",
+				},
+				cli.BoolFlag{
+					Name:  FlagEnableTLS,
+					Usage: "use TLS over cassandra connection",
+				},
+				cli.StringFlag{
+					Name:  FlagTLSCertPath,
+					Usage: "cassandra tls client cert path (tls must be enabled)",
+				},
+				cli.StringFlag{
+					Name:  FlagTLSKeyPath,
+					Usage: "cassandra tls client key path (tls must be enabled)",
+				},
+				cli.StringFlag{
+					Name:  FlagTLSCaPath,
+					Usage: "cassandra tls client ca path (tls must be enabled)",
+				},
+				cli.BoolFlag{
+					Name:  FlagTLSEnableHostVerification,
+					Usage: "cassandra tls verify hostname and server cert (tls must be enabled)",
 				},
 			},
 			Action: func(c *cli.Context) {
@@ -368,7 +451,7 @@ tls:
     enabled: false
     certFile: ""
     keyFile: ""
-    bundleFile: ""
+    caFile: ""
 clusters:
 	localKafka:
 		brokers:
@@ -420,7 +503,7 @@ tls:
     enabled: false
     certFile: ""
     keyFile: ""
-    bundleFile: ""
+    caFile: ""
 clusters:
 	localKafka:
 		brokers:
@@ -475,14 +558,16 @@ clusters:
 					Usage: "DomainID",
 				},
 
-				// for cassandra connection
+				// for persistence connection
+				// TODO need to support other database: https://github.com/uber/cadence/issues/2777
 				cli.StringFlag{
-					Name:  FlagAddress,
-					Usage: "cassandra host address",
+					Name:  FlagDBAddress,
+					Usage: "persistence address(right now only cassandra is supported)",
 				},
 				cli.IntFlag{
-					Name:  FlagPort,
-					Usage: "cassandra port for the host (default is 9042)",
+					Name:  FlagDBPort,
+					Value: 9042,
+					Usage: "persistence port",
 				},
 				cli.StringFlag{
 					Name:  FlagUsername,
@@ -495,6 +580,26 @@ clusters:
 				cli.StringFlag{
 					Name:  FlagKeyspace,
 					Usage: "cassandra keyspace",
+				},
+				cli.BoolFlag{
+					Name:  FlagEnableTLS,
+					Usage: "use TLS over cassandra connection",
+				},
+				cli.StringFlag{
+					Name:  FlagTLSCertPath,
+					Usage: "cassandra tls client cert path (tls must be enabled)",
+				},
+				cli.StringFlag{
+					Name:  FlagTLSKeyPath,
+					Usage: "cassandra tls client key path (tls must be enabled)",
+				},
+				cli.StringFlag{
+					Name:  FlagTLSCaPath,
+					Usage: "cassandra tls client ca path (tls must be enabled)",
+				},
+				cli.BoolFlag{
+					Name:  FlagTLSEnableHostVerification,
+					Usage: "cassandra tls verify hostname and server cert (tls must be enabled)",
 				},
 
 				// kafka
@@ -513,7 +618,7 @@ tls:
     enabled: false
     certFile: ""
     keyFile: ""
-    bundleFile: ""
+    caFile: ""
 clusters:
 	localKafka:
 		brokers:
@@ -689,9 +794,100 @@ func newAdminClusterCommands() []cli.Command {
 					Value: -1,
 					Usage: "Search Attribute value type. [0:String, 1:Keyword, 2:Int, 3:Double, 4:Bool, 5:Datetime]",
 				},
+				cli.StringFlag{
+					Name:  FlagSecurityTokenWithAlias,
+					Usage: "Optional token for security check",
+				},
 			},
 			Action: func(c *cli.Context) {
 				AdminAddSearchAttribute(c)
+			},
+		},
+		{
+			Name:    "describe",
+			Aliases: []string{"d"},
+			Usage:   "Describe cluster information",
+			Action: func(c *cli.Context) {
+				AdminDescribeCluster(c)
+			},
+		},
+	}
+}
+
+func newAdminDLQCommands() []cli.Command {
+	return []cli.Command{
+		{
+			Name:    "read",
+			Aliases: []string{"r"},
+			Usage:   "Read DLQ Messages",
+			Flags: []cli.Flag{
+				cli.StringFlag{
+					Name:  FlagDLQTypeWithAlias,
+					Usage: "Type of DLQ to manage. (Options: domain, history)",
+				},
+				cli.IntFlag{
+					Name:  FlagShardIDWithAlias,
+					Usage: "ShardID",
+				},
+				cli.IntFlag{
+					Name:  FlagMaxMessageCountWithAlias,
+					Usage: "Max message size to fetch",
+				},
+				cli.IntFlag{
+					Name:  FlagLastMessageID,
+					Usage: "The upper boundary of the read message",
+				},
+				cli.StringFlag{
+					Name:  FlagOutputFilenameWithAlias,
+					Usage: "Output file to write to, if not provided output is written to stdout",
+				},
+			},
+			Action: func(c *cli.Context) {
+				AdminGetDLQMessages(c)
+			},
+		},
+		{
+			Name:    "purge",
+			Aliases: []string{"p"},
+			Usage:   "Delete DLQ messages with equal or smaller ids than the provided task id",
+			Flags: []cli.Flag{
+				cli.StringFlag{
+					Name:  FlagDLQTypeWithAlias,
+					Usage: "Type of DLQ to manage. (Options: domain, history)",
+				},
+				cli.IntFlag{
+					Name:  FlagShardIDWithAlias,
+					Usage: "ShardID",
+				},
+				cli.IntFlag{
+					Name:  FlagLastMessageID,
+					Usage: "The upper boundary of the read message",
+				},
+			},
+			Action: func(c *cli.Context) {
+				AdminPurgeDLQMessages(c)
+			},
+		},
+		{
+			Name:    "merge",
+			Aliases: []string{"m"},
+			Usage:   "Merge DLQ messages with equal or smaller ids than the provided task id",
+			Flags: []cli.Flag{
+				cli.StringFlag{
+					Name:  FlagDLQTypeWithAlias,
+					Usage: "Type of DLQ to manage. (Options: domain, history)",
+				},
+				cli.IntFlag{
+					Name:  FlagShardIDWithAlias,
+					Usage: "ShardID",
+				},
+				cli.IntFlag{
+					Name:  FlagLastMessageID,
+					Usage: "The upper boundary of the read message",
+				},
+			},
+			Action: func(c *cli.Context) {
+				AdminMergeDLQMessages(c)
 			},
 		},
 	}

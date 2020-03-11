@@ -18,6 +18,8 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 // THE SOFTWARE.
 
+//go:generate mockgen -copyright_file ../../LICENSE -package $GOPACKAGE -source $GOFILE -destination domainCache_mock.go -self_package github.com/uber/cadence/common/cache
+
 package cache
 
 import (
@@ -57,7 +59,10 @@ const (
 	domainCacheTTL         = 0 // 0 means infinity
 	// DomainCacheRefreshInterval domain cache refresh interval
 	DomainCacheRefreshInterval = 10 * time.Second
-	domainCacheRefreshPageSize = 200
+	// DomainCacheRefreshFailureRetryInterval is the wait time
+	// if refreshment encounters error
+	DomainCacheRefreshFailureRetryInterval = 1 * time.Second
+	domainCacheRefreshPageSize             = 200
 
 	domainCacheInitialized int32 = 0
 	domainCacheStarted     int32 = 1
@@ -349,7 +354,7 @@ func (c *domainCache) GetDomainByID(
 	if id == "" {
 		return nil, &workflow.BadRequestError{Message: "DomainID is empty."}
 	}
-	return c.getDomainByID(id)
+	return c.getDomainByID(id, true)
 }
 
 // GetDomainID retrieves domainID by using GetDomain
@@ -369,7 +374,7 @@ func (c *domainCache) GetDomainName(
 	id string,
 ) (string, error) {
 
-	entry, err := c.getDomainByID(id)
+	entry, err := c.getDomainByID(id, false)
 	if err != nil {
 		return "", err
 	}
@@ -377,16 +382,22 @@ func (c *domainCache) GetDomainName(
 }
 
 func (c *domainCache) refreshLoop() {
-	timer := time.NewTimer(DomainCacheRefreshInterval)
+	timer := time.NewTicker(DomainCacheRefreshInterval)
 	defer timer.Stop()
+
 	for {
 		select {
 		case <-c.shutdownChan:
 			return
 		case <-timer.C:
-			timer.Reset(DomainCacheRefreshInterval)
-			if err := c.refreshDomains(); err != nil {
-				c.logger.Error("Error refreshing domain cache", tag.Error(err))
+			for err := c.refreshDomains(); err != nil; err = c.refreshDomains() {
+				select {
+				case <-c.shutdownChan:
+					return
+				default:
+					c.logger.Error("Error refreshing domain cache", tag.Error(err))
+					time.Sleep(DomainCacheRefreshFailureRetryInterval)
+				}
 			}
 		}
 	}
@@ -541,7 +552,7 @@ func (c *domainCache) getDomain(
 
 	id, cacheHit := c.cacheNameToID.Load().(Cache).Get(name).(string)
 	if cacheHit {
-		return c.getDomainByID(id)
+		return c.getDomainByID(id, true)
 	}
 
 	if err := c.checkDomainExists(name, ""); err != nil {
@@ -552,14 +563,14 @@ func (c *domainCache) getDomain(
 	defer c.refreshLock.Unlock()
 	id, cacheHit = c.cacheNameToID.Load().(Cache).Get(name).(string)
 	if cacheHit {
-		return c.getDomainByID(id)
+		return c.getDomainByID(id, true)
 	}
 	if err := c.refreshDomainsLocked(); err != nil {
 		return nil, err
 	}
 	id, cacheHit = c.cacheNameToID.Load().(Cache).Get(name).(string)
 	if cacheHit {
-		return c.getDomainByID(id)
+		return c.getDomainByID(id, true)
 	}
 	// impossible case
 	return nil, &workflow.InternalServiceError{Message: "domainCache encounter case where domain exists but cannot be loaded"}
@@ -569,13 +580,17 @@ func (c *domainCache) getDomain(
 // store and writes it to the cache with an expiry before returning back
 func (c *domainCache) getDomainByID(
 	id string,
+	deepCopy bool,
 ) (*DomainCacheEntry, error) {
 
 	var result *DomainCacheEntry
 	entry, cacheHit := c.cacheByID.Load().(Cache).Get(id).(*DomainCacheEntry)
 	if cacheHit {
 		entry.RLock()
-		result = entry.duplicate()
+		result = entry
+		if deepCopy {
+			result = entry.duplicate()
+		}
 		entry.RUnlock()
 		return result, nil
 	}
@@ -589,7 +604,10 @@ func (c *domainCache) getDomainByID(
 	entry, cacheHit = c.cacheByID.Load().(Cache).Get(id).(*DomainCacheEntry)
 	if cacheHit {
 		entry.RLock()
-		result = entry.duplicate()
+		result = entry
+		if deepCopy {
+			result = entry.duplicate()
+		}
 		entry.RUnlock()
 		return result, nil
 	}
@@ -599,7 +617,10 @@ func (c *domainCache) getDomainByID(
 	entry, cacheHit = c.cacheByID.Load().(Cache).Get(id).(*DomainCacheEntry)
 	if cacheHit {
 		entry.RLock()
-		result = entry.duplicate()
+		result = entry
+		if deepCopy {
+			result = entry.duplicate()
+		}
 		entry.RUnlock()
 		return result, nil
 	}
@@ -835,7 +856,10 @@ func (entry *DomainCacheEntry) IsSampledForLongerRetention(
 		}
 
 		h := fnv.New32a()
-		h.Write([]byte(workflowID))
+		_, err = h.Write([]byte(workflowID))
+		if err != nil {
+			return false
+		}
 		hash := h.Sum32()
 
 		r := float64(hash%1000) / float64(1000) // use 1000 so we support one decimal rate like 1.5%.

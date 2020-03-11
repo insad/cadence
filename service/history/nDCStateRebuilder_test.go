@@ -27,41 +27,36 @@ import (
 
 	"github.com/golang/mock/gomock"
 	"github.com/pborman/uuid"
-	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
-	"github.com/uber-go/tally"
+
 	"github.com/uber/cadence/.gen/go/shared"
 	"github.com/uber/cadence/common"
 	"github.com/uber/cadence/common/cache"
-	"github.com/uber/cadence/common/clock"
 	"github.com/uber/cadence/common/cluster"
 	"github.com/uber/cadence/common/collection"
 	"github.com/uber/cadence/common/definition"
 	"github.com/uber/cadence/common/log"
-	"github.com/uber/cadence/common/log/loggerimpl"
-	"github.com/uber/cadence/common/metrics"
 	"github.com/uber/cadence/common/mocks"
 	"github.com/uber/cadence/common/persistence"
-	"github.com/uber/cadence/common/service"
 )
 
 type (
 	nDCStateRebuilderSuite struct {
 		suite.Suite
+		*require.Assertions
 
-		controller        *gomock.Controller
-		mockTaskRefresher *MockmutableStateTaskRefresher
+		controller          *gomock.Controller
+		mockShard           *shardContextTest
+		mockEventsCache     *MockeventsCache
+		mockTaskRefresher   *MockmutableStateTaskRefresher
+		mockDomainCache     *cache.MockDomainCache
+		mockClusterMetadata *cluster.MockMetadata
 
-		mockService         service.Service
-		mockShard           *shardContextImpl
-		mockHistoryV2Mgr    *mocks.HistoryV2Manager
-		mockClusterMetadata *mocks.ClusterMetadata
-		mockDomainCache     *cache.DomainCacheMock
-		mockEventsCache     *MockEventsCache
-		logger              log.Logger
+		mockHistoryV2Mgr *mocks.HistoryV2Manager
+		logger           log.Logger
 
 		domainID   string
-		domainName string
 		workflowID string
 		runID      string
 
@@ -75,39 +70,29 @@ func TestNDCStateRebuilderSuite(t *testing.T) {
 }
 
 func (s *nDCStateRebuilderSuite) SetupTest() {
-	s.logger = loggerimpl.NewDevelopmentForTest(s.Suite)
-	s.mockHistoryV2Mgr = &mocks.HistoryV2Manager{}
-	s.mockClusterMetadata = &mocks.ClusterMetadata{}
-	metricsClient := metrics.NewClient(tally.NoopScope, metrics.History)
-	s.mockService = service.NewTestService(
-		s.mockClusterMetadata,
-		nil,
-		metricsClient,
-		nil,
-		nil,
-		nil,
-		nil)
-	s.mockDomainCache = &cache.DomainCacheMock{}
-	s.mockEventsCache = &MockEventsCache{}
-
-	s.mockShard = &shardContextImpl{
-		service:                   s.mockService,
-		shardInfo:                 &persistence.ShardInfo{ShardID: 10, RangeID: 1, TransferAckLevel: 0},
-		transferSequenceNumber:    1,
-		historyV2Mgr:              s.mockHistoryV2Mgr,
-		maxTransferSequenceNumber: 100000,
-		closeCh:                   make(chan int, 100),
-		config:                    NewDynamicConfigForTest(),
-		logger:                    s.logger,
-		domainCache:               s.mockDomainCache,
-		metricsClient:             metrics.NewClient(tally.NoopScope, metrics.History),
-		eventsCache:               s.mockEventsCache,
-		timeSource:                clock.NewRealTimeSource(),
-	}
-	s.mockClusterMetadata.On("GetCurrentClusterName").Return(cluster.TestCurrentClusterName)
+	s.Assertions = require.New(s.T())
 
 	s.controller = gomock.NewController(s.T())
 	s.mockTaskRefresher = NewMockmutableStateTaskRefresher(s.controller)
+
+	s.mockShard = newTestShardContext(
+		s.controller,
+		&persistence.ShardInfo{
+			ShardID:          10,
+			RangeID:          1,
+			TransferAckLevel: 0,
+		},
+		NewDynamicConfigForTest(),
+	)
+
+	s.mockHistoryV2Mgr = s.mockShard.resource.HistoryMgr
+	s.mockDomainCache = s.mockShard.resource.DomainCache
+	s.mockClusterMetadata = s.mockShard.resource.ClusterMetadata
+	s.mockEventsCache = s.mockShard.mockEventsCache
+	s.mockClusterMetadata.EXPECT().GetCurrentClusterName().Return(cluster.TestCurrentClusterName).AnyTimes()
+	s.mockEventsCache.EXPECT().putEvent(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).AnyTimes()
+
+	s.logger = s.mockShard.GetLogger()
 
 	s.workflowID = "some random workflow ID"
 	s.runID = uuid.New()
@@ -118,10 +103,8 @@ func (s *nDCStateRebuilderSuite) SetupTest() {
 }
 
 func (s *nDCStateRebuilderSuite) TearDownTest() {
-	s.mockHistoryV2Mgr.AssertExpectations(s.T())
-	s.mockDomainCache.AssertExpectations(s.T())
-	s.mockEventsCache.AssertExpectations(s.T())
-	// s.controller.Finish()
+	s.controller.Finish()
+	s.mockShard.Finish(s.T())
 }
 
 func (s *nDCStateRebuilderSuite) TestInitializeBuilders() {
@@ -149,9 +132,8 @@ func (s *nDCStateRebuilderSuite) TestApplyEvents() {
 
 	workflowIdentifier := definition.NewWorkflowIdentifier(s.domainID, s.workflowID, s.runID)
 
-	mockStateBuilder := &mockStateBuilder{}
-	defer mockStateBuilder.AssertExpectations(s.T())
-	mockStateBuilder.On("applyEvents",
+	mockStateBuilder := NewMockstateBuilder(s.controller)
+	mockStateBuilder.EXPECT().applyEvents(
 		s.domainID,
 		requestID,
 		shared.WorkflowExecution{
@@ -161,7 +143,7 @@ func (s *nDCStateRebuilderSuite) TestApplyEvents() {
 		events,
 		[]*shared.HistoryEvent(nil),
 		true,
-	).Return(nil, nil, nil, nil).Once()
+	).Return(nil, nil).Times(1)
 
 	err := s.nDCStateRebuilder.applyEvents(workflowIdentifier, mockStateBuilder, events, requestID)
 	s.NoError(err)
@@ -305,7 +287,7 @@ func (s *nDCStateRebuilderSuite) TestRebuild() {
 		Size:          historySize2,
 	}, nil).Once()
 
-	s.mockDomainCache.On("GetDomainByID", targetDomainID).Return(cache.NewGlobalDomainCacheEntryForTest(
+	s.mockDomainCache.EXPECT().GetDomainByID(targetDomainID).Return(cache.NewGlobalDomainCacheEntryForTest(
 		&persistence.DomainInfo{ID: targetDomainID, Name: targetDomainName},
 		&persistence.DomainConfig{},
 		&persistence.DomainReplicationConfig{
@@ -317,10 +299,9 @@ func (s *nDCStateRebuilderSuite) TestRebuild() {
 		},
 		1234,
 		s.mockClusterMetadata,
-	), nil)
+	), nil).AnyTimes()
 	s.mockTaskRefresher.EXPECT().refreshTasks(now, gomock.Any()).Return(nil).Times(1)
 
-	s.mockEventsCache.On("putEvent", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return()
 	rebuildMutableState, rebuiltHistorySize, err := s.nDCStateRebuilder.rebuild(
 		ctx.Background(),
 		now,
@@ -345,4 +326,5 @@ func (s *nDCStateRebuilderSuite) TestRebuild() {
 			[]*persistence.VersionHistoryItem{persistence.NewVersionHistoryItem(lastEventID, version)},
 		),
 	), rebuildMutableState.GetVersionHistories())
+	s.Equal(rebuildMutableState.GetExecutionInfo().StartTimestamp, now)
 }

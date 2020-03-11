@@ -38,7 +38,8 @@ var sanityChildWFList = []string{
 	wfTypeCancellation,
 	wfTypeRetry,
 	wfTypeReset,
-	wfTypeArchival,
+	wfTypeHistoryArchival,
+	wfTypeVisibilityArchival,
 	wfTypeBatch,
 }
 
@@ -55,7 +56,7 @@ func sanityWorkflow(ctx workflow.Context, scheduledTimeNanos int64, domain strin
 	var err error
 	profile, err := beginWorkflow(ctx, wfTypeSanity, scheduledTimeNanos)
 	if err != nil {
-		return profile.end(err)
+		return err
 	}
 
 	childNames, err := getChildWorkflowNames(ctx)

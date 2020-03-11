@@ -29,12 +29,13 @@ import (
 	"time"
 
 	"github.com/olekukonko/tablewriter"
+	"github.com/urfave/cli"
+	s "go.uber.org/cadence/.gen/go/shared"
+
 	serviceFrontend "github.com/uber/cadence/.gen/go/cadence/workflowserviceclient"
 	"github.com/uber/cadence/.gen/go/shared"
 	"github.com/uber/cadence/common"
 	"github.com/uber/cadence/common/domain"
-	"github.com/urfave/cli"
-	s "go.uber.org/cadence/.gen/go/shared"
 )
 
 type (
@@ -78,14 +79,8 @@ func (d *domainCLIImpl) RegisterDomain(c *cli.Context) {
 		retentionDays = c.Int(FlagRetentionDays)
 	}
 	securityToken := c.String(FlagSecurityToken)
-	emitMetric := false
 	var err error
-	if c.IsSet(FlagEmitMetric) {
-		emitMetric, err = strconv.ParseBool(c.String(FlagEmitMetric))
-		if err != nil {
-			ErrorAndExit(fmt.Sprintf("Option %s format is invalid.", FlagEmitMetric), err)
-		}
-	}
+
 	var isGlobalDomainPtr *bool
 	if c.IsSet(FlagIsGlobalDomain) {
 		isGlobalDomain, err := strconv.ParseBool(c.String(FlagIsGlobalDomain))
@@ -134,7 +129,6 @@ func (d *domainCLIImpl) RegisterDomain(c *cli.Context) {
 		OwnerEmail:                             common.StringPtr(ownerEmail),
 		Data:                                   domainData,
 		WorkflowExecutionRetentionPeriodInDays: common.Int32Ptr(int32(retentionDays)),
-		EmitMetric:                             common.BoolPtr(emitMetric),
 		Clusters:                               clusters,
 		ActiveClusterName:                      activeClusterName,
 		SecurityToken:                          common.StringPtr(securityToken),
@@ -212,12 +206,6 @@ func (d *domainCLIImpl) UpdateDomain(c *cli.Context) {
 		}
 		if c.IsSet(FlagRetentionDays) {
 			retentionDays = int32(c.Int(FlagRetentionDays))
-		}
-		if c.IsSet(FlagEmitMetric) {
-			emitMetric, err = strconv.ParseBool(c.String(FlagEmitMetric))
-			if err != nil {
-				ErrorAndExit(fmt.Sprintf("Option %s format is invalid.", FlagEmitMetric), err)
-			}
 		}
 		if c.IsSet(FlagClusters) {
 			clusterStr := c.String(FlagClusters)

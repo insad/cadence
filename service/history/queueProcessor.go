@@ -75,8 +75,7 @@ type (
 var (
 	errUnexpectedQueueTask = errors.New("unexpected queue task")
 
-	loadDomainEntryForQueueTaskRetryDelay = 100 * time.Millisecond
-	loadQueueTaskThrottleRetryDelay       = 5 * time.Second
+	loadQueueTaskThrottleRetryDelay = 5 * time.Second
 )
 
 func newQueueProcessorBase(
@@ -227,10 +226,11 @@ func (p *queueProcessorBase) processBatch() {
 
 	for _, task := range tasks {
 		if shutdown := p.taskProcessor.addTask(
-			&taskInfo{
-				processor: p.processor,
-				task:      task,
-			},
+			newTaskInfo(
+				p.processor,
+				task,
+				initializeLoggerForTask(p.shard.GetShardID(), task, p.logger),
+			),
 		); shutdown {
 			return
 		}

@@ -18,6 +18,8 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 // THE SOFTWARE.
 
+//go:generate mockgen -copyright_file ../../LICENSE -package $GOPACKAGE -source $GOFILE -destination conflictResolver_mock.go -self_package github.com/uber/cadence/service/history
+
 package history
 
 import (
@@ -46,12 +48,12 @@ type (
 		shard           ShardContext
 		clusterMetadata cluster.Metadata
 		context         workflowExecutionContext
-		historyV2Mgr    persistence.HistoryV2Manager
+		historyV2Mgr    persistence.HistoryManager
 		logger          log.Logger
 	}
 )
 
-func newConflictResolver(shard ShardContext, context workflowExecutionContext, historyV2Mgr persistence.HistoryV2Manager,
+func newConflictResolver(shard ShardContext, context workflowExecutionContext, historyV2Mgr persistence.HistoryManager,
 	logger log.Logger) *conflictResolverImpl {
 
 	return &conflictResolverImpl{
@@ -121,10 +123,17 @@ func (r *conflictResolverImpl) reset(
 				domainEntry,
 			)
 
-			sBuilder = newStateBuilder(r.shard, resetMutableStateBuilder, r.logger)
+			sBuilder = newStateBuilder(
+				r.shard,
+				r.logger,
+				resetMutableStateBuilder,
+				func(mutableState mutableState) mutableStateTaskGenerator {
+					return newMutableStateTaskGenerator(r.shard.GetDomainCache(), r.logger, mutableState)
+				},
+			)
 		}
 
-		_, _, _, err = sBuilder.applyEvents(domainID, requestID, execution, history, nil, false)
+		_, err = sBuilder.applyEvents(domainID, requestID, execution, history, nil, false)
 		if err != nil {
 			r.logError("Conflict resolution err applying events.", err)
 			return nil, err

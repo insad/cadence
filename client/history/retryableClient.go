@@ -22,11 +22,13 @@ package history
 
 import (
 	"context"
+
+	"go.uber.org/yarpc"
+
 	h "github.com/uber/cadence/.gen/go/history"
 	"github.com/uber/cadence/.gen/go/replicator"
 	"github.com/uber/cadence/.gen/go/shared"
 	"github.com/uber/cadence/common/backoff"
-	"go.uber.org/yarpc"
 )
 
 var _ Client = (*retryableClient)(nil)
@@ -84,8 +86,7 @@ func (c *retryableClient) CloseShard(
 	opts ...yarpc.CallOption) error {
 
 	op := func() error {
-		var err error
-		err = c.client.CloseShard(ctx, request, opts...)
+		err := c.client.CloseShard(ctx, request, opts...)
 		return err
 	}
 
@@ -99,8 +100,7 @@ func (c *retryableClient) RemoveTask(
 	opts ...yarpc.CallOption) error {
 
 	op := func() error {
-		var err error
-		err = c.client.RemoveTask(ctx, request, opts...)
+		err := c.client.RemoveTask(ctx, request, opts...)
 		return err
 	}
 
@@ -480,6 +480,22 @@ func (c *retryableClient) GetReplicationMessages(
 	return resp, err
 }
 
+func (c *retryableClient) GetDLQReplicationMessages(
+	ctx context.Context,
+	request *replicator.GetDLQReplicationMessagesRequest,
+	opts ...yarpc.CallOption,
+) (*replicator.GetDLQReplicationMessagesResponse, error) {
+	var resp *replicator.GetDLQReplicationMessagesResponse
+	op := func() error {
+		var err error
+		resp, err = c.client.GetDLQReplicationMessages(ctx, request, opts...)
+		return err
+	}
+
+	err := backoff.Retry(op, c.policy, c.isRetryable)
+	return resp, err
+}
+
 func (c *retryableClient) QueryWorkflow(
 	ctx context.Context,
 	request *h.QueryWorkflowRequest,
@@ -504,6 +520,66 @@ func (c *retryableClient) ReapplyEvents(
 
 	op := func() error {
 		return c.client.ReapplyEvents(ctx, request, opts...)
+	}
+
+	return backoff.Retry(op, c.policy, c.isRetryable)
+}
+
+func (c *retryableClient) ReadDLQMessages(
+	ctx context.Context,
+	request *replicator.ReadDLQMessagesRequest,
+	opts ...yarpc.CallOption,
+) (*replicator.ReadDLQMessagesResponse, error) {
+
+	var resp *replicator.ReadDLQMessagesResponse
+	op := func() error {
+		var err error
+		resp, err = c.client.ReadDLQMessages(ctx, request, opts...)
+		return err
+	}
+
+	err := backoff.Retry(op, c.policy, c.isRetryable)
+	return resp, err
+}
+
+func (c *retryableClient) PurgeDLQMessages(
+	ctx context.Context,
+	request *replicator.PurgeDLQMessagesRequest,
+	opts ...yarpc.CallOption,
+) error {
+
+	op := func() error {
+		return c.client.PurgeDLQMessages(ctx, request, opts...)
+	}
+
+	return backoff.Retry(op, c.policy, c.isRetryable)
+}
+
+func (c *retryableClient) MergeDLQMessages(
+	ctx context.Context,
+	request *replicator.MergeDLQMessagesRequest,
+	opts ...yarpc.CallOption,
+) (*replicator.MergeDLQMessagesResponse, error) {
+
+	var resp *replicator.MergeDLQMessagesResponse
+	op := func() error {
+		var err error
+		resp, err = c.client.MergeDLQMessages(ctx, request, opts...)
+		return err
+	}
+
+	err := backoff.Retry(op, c.policy, c.isRetryable)
+	return resp, err
+}
+
+func (c *retryableClient) RefreshWorkflowTasks(
+	ctx context.Context,
+	request *h.RefreshWorkflowTasksRequest,
+	opts ...yarpc.CallOption,
+) error {
+
+	op := func() error {
+		return c.client.RefreshWorkflowTasks(ctx, request, opts...)
 	}
 
 	return backoff.Retry(op, c.policy, c.isRetryable)

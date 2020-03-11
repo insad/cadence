@@ -17,6 +17,8 @@ CREATE TYPE shard (
   domain_notification_version bigint, -- the global domain change version this shard is aware of
   -- Mapping of (remote) cluster to corresponding replication level (last replicated task_id)
   cluster_replication_level   map<text, bigint>,
+  -- Mapping of (remote) cluster to corresponding replication DLQ ack level (last replicated task_id)
+  replication_dlq_ack_level   map<text, bigint>,
 );
 
 --- Workflow execution and mutable state ---
@@ -34,7 +36,7 @@ CREATE TYPE workflow_execution (
   task_list                        text,
   workflow_type_name               text,
   workflow_timeout                 int,  -- Workflow ExecutionStartToCloseTimeoutSeconds
-  decision_task_timeout            int,
+  decision_task_timeout            int,  -- decision start to close timeout
   execution_context                blob,
   state                            int,  -- enum WorkflowState {Created, Running, Completed}
   close_status                     int,  -- enum WorkflowCloseStatus {None, Completed, Failed, Canceled, Terminated, ContinuedAsNew, TimedOut}
@@ -188,7 +190,10 @@ CREATE TYPE timer_info (
   timer_id      text,      -- User defined timer ID
   started_id    bigint,    -- The event ID corresponding to timer started.
   expiry_time   timestamp, -- Timestamp at which this timer expires or fires
-  task_id       bigint,    -- The task ID if we have one created for this timer
+  -- task_id is a misleading variable, it actually serves
+  -- the purpose of indicating whether a timer task is
+  -- generated for this timer info
+  task_id       bigint,
 );
 
 -- Child execution in progress mutable state
@@ -299,6 +304,12 @@ CREATE TYPE branch_range (
   end_node_id bigint, -- exclusive node_id to represent the stopping point for this range
 );
 
+CREATE TYPE checksum (
+  version int,  -- version of the payload used to generate checksum
+  flavor  int,  -- type of checksum e.g crc32OverThrift
+  value   blob, -- checksum bytes
+);
+
 CREATE TABLE executions (
   shard_id                       int,
   type                           int, -- enum RowType { Shard, Execution, TransferTask, TimerTask, ReplicationTask}
@@ -328,6 +339,7 @@ CREATE TABLE executions (
   workflow_state                 int,
   version_histories              blob, -- the metadata of history branching
   version_histories_encoding     text,
+  checksum                       frozen<checksum>,
   PRIMARY KEY  (shard_id, type, domain_id, workflow_id, run_id, visibility_ts, task_id)
 ) WITH COMPACTION = {
     'class': 'org.apache.cassandra.db.compaction.LeveledCompactionStrategy'
@@ -350,7 +362,6 @@ CREATE TABLE history_tree (
   tree_id           uuid,
   branch_id         uuid,
   ancestors         list<frozen<branch_range>>,
-  in_progress       boolean, -- For fork operation to prevent race condition to leak event data when forking branches
   fork_time         timestamp, -- For fork operation to prevent race condition to leak event data when forking branches
   info              text, -- For background cleanup when fork operation cannot finish self cleanup due to crash
   PRIMARY KEY ((tree_id), branch_id )

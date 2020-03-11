@@ -26,30 +26,26 @@ import (
 
 	"github.com/golang/mock/gomock"
 	"github.com/pborman/uuid"
+	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
-	"github.com/uber-go/tally"
 
-	"github.com/uber/cadence/common/clock"
 	"github.com/uber/cadence/common/definition"
 	"github.com/uber/cadence/common/log"
-	"github.com/uber/cadence/common/log/loggerimpl"
-	"github.com/uber/cadence/common/metrics"
 	"github.com/uber/cadence/common/persistence"
-	"github.com/uber/cadence/common/service"
 )
 
 type (
 	nDCConflictResolverSuite struct {
 		suite.Suite
+		*require.Assertions
 
 		controller       *gomock.Controller
+		mockShard        *shardContextTest
+		mockContext      *MockworkflowExecutionContext
+		mockMutableState *MockmutableState
 		mockStateBuilder *MocknDCStateRebuilder
 
-		mockService      service.Service
-		mockShard        *shardContextImpl
-		mockContext      *mockWorkflowExecutionContext
-		mockMutableState *mockMutableState
-		logger           log.Logger
+		logger log.Logger
 
 		domainID   string
 		domainName string
@@ -66,37 +62,30 @@ func TestNDCConflictResolverSuite(t *testing.T) {
 }
 
 func (s *nDCConflictResolverSuite) SetupTest() {
-	s.logger = loggerimpl.NewDevelopmentForTest(s.Suite)
-	metricsClient := metrics.NewClient(tally.NoopScope, metrics.History)
-	s.mockService = service.NewTestService(
-		nil,
-		nil,
-		metricsClient,
-		nil,
-		nil,
-		nil,
-		nil)
-	s.mockShard = &shardContextImpl{
-		service:                   s.mockService,
-		shardInfo:                 &persistence.ShardInfo{ShardID: 10, RangeID: 1, TransferAckLevel: 0},
-		transferSequenceNumber:    1,
-		maxTransferSequenceNumber: 100000,
-		closeCh:                   make(chan int, 100),
-		config:                    NewDynamicConfigForTest(),
-		logger:                    s.logger,
-		metricsClient:             metrics.NewClient(tally.NoopScope, metrics.History),
-		timeSource:                clock.NewRealTimeSource(),
-	}
+	s.Assertions = require.New(s.T())
+
+	s.controller = gomock.NewController(s.T())
+	s.mockContext = NewMockworkflowExecutionContext(s.controller)
+	s.mockMutableState = NewMockmutableState(s.controller)
+	s.mockStateBuilder = NewMocknDCStateRebuilder(s.controller)
+
+	s.mockShard = newTestShardContext(
+		s.controller,
+		&persistence.ShardInfo{
+			ShardID:          10,
+			RangeID:          1,
+			TransferAckLevel: 0,
+		},
+		NewDynamicConfigForTest(),
+	)
+
+	s.logger = s.mockShard.GetLogger()
 
 	s.domainID = uuid.New()
 	s.domainName = "some random domain name"
 	s.workflowID = "some random workflow ID"
 	s.runID = uuid.New()
-	s.mockContext = &mockWorkflowExecutionContext{}
-	s.mockMutableState = &mockMutableState{}
 
-	s.controller = gomock.NewController(s.T())
-	s.mockStateBuilder = NewMocknDCStateRebuilder(s.controller)
 	s.nDCConflictResolver = newNDCConflictResolver(
 		s.mockShard, s.mockContext, s.mockMutableState, s.logger,
 	)
@@ -104,9 +93,8 @@ func (s *nDCConflictResolverSuite) SetupTest() {
 }
 
 func (s *nDCConflictResolverSuite) TearDownTest() {
-	s.mockContext.AssertExpectations(s.T())
-	s.mockMutableState.AssertExpectations(s.T())
 	s.controller.Finish()
+	s.mockShard.Finish(s.T())
 }
 
 func (s *nDCConflictResolverSuite) TestRebuild() {
@@ -132,31 +120,30 @@ func (s *nDCConflictResolverSuite) TestRebuild() {
 	_, _, err := versionHistories.AddVersionHistory(versionHistory1)
 	s.NoError(err)
 
-	s.mockMutableState.On("GetUpdateCondition").Return(updateCondition)
-	s.mockMutableState.On("GetVersionHistories").Return(versionHistories)
-	s.mockMutableState.On("GetExecutionInfo").Return(&persistence.WorkflowExecutionInfo{
+	s.mockMutableState.EXPECT().GetUpdateCondition().Return(updateCondition).AnyTimes()
+	s.mockMutableState.EXPECT().GetVersionHistories().Return(versionHistories).AnyTimes()
+	s.mockMutableState.EXPECT().GetExecutionInfo().Return(&persistence.WorkflowExecutionInfo{
 		DomainID:   s.domainID,
 		WorkflowID: s.workflowID,
 		RunID:      s.runID,
-	})
+	}).AnyTimes()
 
 	workflowIdentifier := definition.NewWorkflowIdentifier(
 		s.domainID,
 		s.workflowID,
 		s.runID,
 	)
-	mockRebuildMutableState := &mockMutableState{}
-	defer mockRebuildMutableState.AssertExpectations(s.T())
-	mockRebuildMutableState.On("GetVersionHistories").Return(
+	mockRebuildMutableState := NewMockmutableState(s.controller)
+	mockRebuildMutableState.EXPECT().GetVersionHistories().Return(
 		persistence.NewVersionHistories(
 			persistence.NewVersionHistory(
 				branchToken1,
 				[]*persistence.VersionHistoryItem{persistence.NewVersionHistoryItem(lastEventID1, version)},
 			),
 		),
-	).Once()
-	mockRebuildMutableState.On("SetVersionHistories", versionHistories).Return(nil).Once()
-	mockRebuildMutableState.On("SetUpdateCondition", updateCondition).Once()
+	).Times(1)
+	mockRebuildMutableState.EXPECT().SetVersionHistories(versionHistories).Return(nil).Times(1)
+	mockRebuildMutableState.EXPECT().SetUpdateCondition(updateCondition).Times(1)
 
 	s.mockStateBuilder.EXPECT().rebuild(
 		ctx,
@@ -170,8 +157,8 @@ func (s *nDCConflictResolverSuite) TestRebuild() {
 		requestID,
 	).Return(mockRebuildMutableState, historySize, nil).Times(1)
 
-	s.mockContext.On("clear").Once()
-	s.mockContext.On("setHistorySize", historySize).Once()
+	s.mockContext.EXPECT().clear().Times(1)
+	s.mockContext.EXPECT().setHistorySize(historySize).Times(1)
 	rebuiltMutableState, err := s.nDCConflictResolver.rebuild(ctx, 1, requestID)
 	s.NoError(err)
 	s.NotNil(rebuiltMutableState)
@@ -188,7 +175,7 @@ func (s *nDCConflictResolverSuite) TestPrepareMutableState_NoRebuild() {
 		[]*persistence.VersionHistoryItem{versionHistoryItem},
 	)
 	versionHistories := persistence.NewVersionHistories(versionHistory)
-	s.mockMutableState.On("GetVersionHistories").Return(versionHistories)
+	s.mockMutableState.EXPECT().GetVersionHistories().Return(versionHistories).AnyTimes()
 
 	rebuiltMutableState, isRebuilt, err := s.nDCConflictResolver.prepareMutableState(ctx.Background(), 0, version)
 	s.NoError(err)
@@ -226,31 +213,30 @@ func (s *nDCConflictResolverSuite) TestPrepareMutableState_Rebuild() {
 	_, _, err := versionHistories.AddVersionHistory(versionHistory1)
 	s.Nil(err)
 
-	s.mockMutableState.On("GetUpdateCondition").Return(updateCondition)
-	s.mockMutableState.On("GetVersionHistories").Return(versionHistories)
-	s.mockMutableState.On("GetExecutionInfo").Return(&persistence.WorkflowExecutionInfo{
+	s.mockMutableState.EXPECT().GetUpdateCondition().Return(updateCondition).AnyTimes()
+	s.mockMutableState.EXPECT().GetVersionHistories().Return(versionHistories).AnyTimes()
+	s.mockMutableState.EXPECT().GetExecutionInfo().Return(&persistence.WorkflowExecutionInfo{
 		DomainID:   s.domainID,
 		WorkflowID: s.workflowID,
 		RunID:      s.runID,
-	})
+	}).AnyTimes()
 
 	workflowIdentifier := definition.NewWorkflowIdentifier(
 		s.domainID,
 		s.workflowID,
 		s.runID,
 	)
-	mockRebuildMutableState := &mockMutableState{}
-	defer mockRebuildMutableState.AssertExpectations(s.T())
-	mockRebuildMutableState.On("GetVersionHistories").Return(
+	mockRebuildMutableState := NewMockmutableState(s.controller)
+	mockRebuildMutableState.EXPECT().GetVersionHistories().Return(
 		persistence.NewVersionHistories(
 			persistence.NewVersionHistory(
 				branchToken1,
 				[]*persistence.VersionHistoryItem{persistence.NewVersionHistoryItem(lastEventID1, version)},
 			),
 		),
-	).Once()
-	mockRebuildMutableState.On("SetVersionHistories", versionHistories).Return(nil).Once()
-	mockRebuildMutableState.On("SetUpdateCondition", updateCondition).Once()
+	).Times(1)
+	mockRebuildMutableState.EXPECT().SetVersionHistories(versionHistories).Return(nil).Times(1)
+	mockRebuildMutableState.EXPECT().SetUpdateCondition(updateCondition).Times(1)
 
 	s.mockStateBuilder.EXPECT().rebuild(
 		ctx,
@@ -264,8 +250,8 @@ func (s *nDCConflictResolverSuite) TestPrepareMutableState_Rebuild() {
 		gomock.Any(),
 	).Return(mockRebuildMutableState, historySize, nil).Times(1)
 
-	s.mockContext.On("clear").Once()
-	s.mockContext.On("setHistorySize", int64(historySize)).Once()
+	s.mockContext.EXPECT().clear().Times(1)
+	s.mockContext.EXPECT().setHistorySize(int64(historySize)).Times(1)
 	rebuiltMutableState, isRebuilt, err := s.nDCConflictResolver.prepareMutableState(ctx, 1, incomingVersion)
 	s.NoError(err)
 	s.NotNil(rebuiltMutableState)

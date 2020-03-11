@@ -1,6 +1,6 @@
 // The MIT License (MIT)
 //
-// Copyright (c) 2019 Uber Technologies, Inc.
+// Copyright (c) 2020 Uber Technologies, Inc.
 //
 // Permission is hereby granted, free of charge, to any person obtaining a copy
 // of this software and associated documentation files (the "Software"), to deal
@@ -28,11 +28,11 @@
 package history
 
 import (
-	"context"
-	"reflect"
-	"time"
+	context "context"
+	reflect "reflect"
+	time "time"
 
-	"github.com/golang/mock/gomock"
+	gomock "github.com/golang/mock/gomock"
 )
 
 // MocknDCTransactionMgrForNewWorkflow is a mock of nDCTransactionMgrForNewWorkflow interface
@@ -67,7 +67,7 @@ func (m *MocknDCTransactionMgrForNewWorkflow) dispatchForNewWorkflow(ctx context
 }
 
 // dispatchForNewWorkflow indicates an expected call of dispatchForNewWorkflow
-func (mr *MocknDCTransactionMgrForNewWorkflowMockRecorder) dispatchForNewWorkflow(ctx context.Context, now time.Time, targetWorkflow nDCWorkflow) *gomock.Call {
+func (mr *MocknDCTransactionMgrForNewWorkflowMockRecorder) dispatchForNewWorkflow(ctx, now, targetWorkflow interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "dispatchForNewWorkflow", reflect.TypeOf((*MocknDCTransactionMgrForNewWorkflow)(nil).dispatchForNewWorkflow), ctx, now, targetWorkflow)
 }

@@ -24,13 +24,14 @@ import "github.com/urfave/cli"
 
 // Flags used to specify cli command line arguments
 const (
-	FlagPort                              = "port"
 	FlagUsername                          = "username"
 	FlagPassword                          = "password"
 	FlagKeyspace                          = "keyspace"
 	FlagAddress                           = "address"
 	FlagAddressWithAlias                  = FlagAddress + ", ad"
 	FlagHistoryAddress                    = "history_address"
+	FlagDBAddress                         = "db_address"
+	FlagDBPort                            = "db_port"
 	FlagHistoryAddressWithAlias           = FlagHistoryAddress + ", had"
 	FlagDomainID                          = "domain_id"
 	FlagDomain                            = "domain"
@@ -71,7 +72,10 @@ const (
 	FlagExcludeFile                       = "exclude_file"
 	FlagInputSeparator                    = "input_separator"
 	FlagParallism                         = "input_parallism"
-	FlagSkipCurrent                       = "skip_current_open"
+	FlagSkipCurrentOpen                   = "skip_current_open"
+	FlagSkipBaseIsNotCurrent              = "skip_base_is_not_current"
+	FlagDryRun                            = "dry_run"
+	FlagNonDeterministicOnly              = "only_non_deterministic"
 	FlagInputTopic                        = "input_topic"
 	FlagInputTopicWithAlias               = FlagInputTopic + ", it"
 	FlagHostFile                          = "host_file"
@@ -89,6 +93,8 @@ const (
 	FlagOpenWithAlias                     = FlagOpen + ", op"
 	FlagMore                              = "more"
 	FlagMoreWithAlias                     = FlagMore + ", m"
+	FlagAll                               = "all"
+	FlagAllWithAlias                      = FlagAll + ", a"
 	FlagPageSize                          = "pagesize"
 	FlagPageSizeWithAlias                 = FlagPageSize + ", ps"
 	FlagEarliestTime                      = "earliest_time"
@@ -117,8 +123,6 @@ const (
 	FlagOwnerEmailWithAlias               = FlagOwnerEmail + ", oe"
 	FlagRetentionDays                     = "retention"
 	FlagRetentionDaysWithAlias            = FlagRetentionDays + ", rd"
-	FlagEmitMetric                        = "emit_metric"
-	FlagEmitMetricWithAlias               = FlagEmitMetric + ", em"
 	FlagHistoryArchivalStatus             = "history_archival_status"
 	FlagHistoryArchivalStatusWithAlias    = FlagHistoryArchivalStatus + ", has"
 	FlagHistoryArchivalURI                = "history_uri"
@@ -136,6 +140,8 @@ const (
 	FlagQueryTypeWithAlias                = FlagQueryType + ", qt"
 	FlagQueryRejectCondition              = "query_reject_condition"
 	FlagQueryRejectConditionWithAlias     = FlagQueryRejectCondition + ", qrc"
+	FlagQueryConsistencyLevel             = "query_consistency_level"
+	FlagQueryConsistencyLevelWithAlias    = FlagQueryConsistencyLevel + ", qcl"
 	FlagShowDetail                        = "show_detail"
 	FlagShowDetailWithAlias               = FlagShowDetail + ", sd"
 	FlagActiveClusterName                 = "active_cluster"
@@ -195,6 +201,17 @@ const (
 	FlagServiceEnvWithAlias               = FlagServiceEnv + ", se"
 	FlagServiceZone                       = "service_zone"
 	FlagServiceZoneWithAlias              = FlagServiceZone + ", sz"
+	FlagEnableTLS                         = "tls"
+	FlagTLSCertPath                       = "tls_cert_path"
+	FlagTLSKeyPath                        = "tls_key_path"
+	FlagTLSCaPath                         = "tls_ca_path"
+	FlagTLSEnableHostVerification         = "tls_enable_host_verification"
+	FlagDLQType                           = "dlq_type"
+	FlagDLQTypeWithAlias                  = FlagDLQType + ", dt"
+	FlagMaxMessageCount                   = "max_message_count"
+	FlagMaxMessageCountWithAlias          = FlagMaxMessageCount + ", mmc"
+	FlagLastMessageID                     = "last_message_id"
+	FlagLastMessageIDWithAlias            = FlagLastMessageID + ", lm"
 )
 
 var flagsForExecution = []cli.Flag{
@@ -393,12 +410,16 @@ func getFlagsForListAll() []cli.Flag {
 			Usage: "List for open workflow executions, default is to list for closed ones",
 		},
 		cli.StringFlag{
-			Name:  FlagEarliestTimeWithAlias,
-			Usage: "EarliestTime of start time, supported formats are '2006-01-02T15:04:05Z07:00' and raw UnixNano",
+			Name: FlagEarliestTimeWithAlias,
+			Usage: "EarliestTime of start time, supported formats are '2006-01-02T15:04:05+07:00', raw UnixNano and " +
+				"time range (N<duration>), where 0 < N < 1000000 and duration (full-notation/short-notation) can be second/s, " +
+				"minute/m, hour/h, day/d, week/w, month/M or year/y. For example, '15minute' or '15m' implies last 15 minutes.",
 		},
 		cli.StringFlag{
-			Name:  FlagLatestTimeWithAlias,
-			Usage: "LatestTime of start time, supported formats are '2006-01-02T15:04:05Z07:00' and raw UnixNano",
+			Name: FlagLatestTimeWithAlias,
+			Usage: "LatestTime of start time, supported formats are '2006-01-02T15:04:05+07:00', raw UnixNano and " +
+				"time range (N<duration>), where 0 < N < 1000000 and duration (in full-notation/short-notation) can be second/s, " +
+				"minute/m, hour/h, day/d, week/w, month/M or year/y. For example, '15minute' or '15m' implies last 15 minutes",
 		},
 		cli.StringFlag{
 			Name:  FlagWorkflowIDWithAlias,
@@ -447,11 +468,11 @@ func getFlagsForListArchived() []cli.Flag {
 		cli.IntFlag{
 			Name:  FlagPageSizeWithAlias,
 			Value: 100,
-			Usage: "Count of visibility records included in a single page",
+			Usage: "Count of visibility records included in a single page, default to 100",
 		},
 		cli.BoolFlag{
-			Name:  FlagMoreWithAlias,
-			Usage: "List more pages, default is to list one page of default page size 10",
+			Name:  FlagAllWithAlias,
+			Usage: "List all pages",
 		},
 	}
 	flagsForListArchived = append(getCommonFlagsForVisibility(), flagsForListArchived...)
@@ -493,6 +514,10 @@ func getFlagsForQuery() []cli.Flag {
 		cli.StringFlag{
 			Name:  FlagQueryRejectConditionWithAlias,
 			Usage: "Optional flag to reject queries based on workflow state. Valid values are \"not_open\" and \"not_completed_cleanly\"",
+		},
+		cli.StringFlag{
+			Name:  FlagQueryConsistencyLevelWithAlias,
+			Usage: "Optional flag to set query consistency level. Valid values are \"eventual\" and \"strong\"",
 		},
 	}
 }

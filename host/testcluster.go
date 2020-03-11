@@ -25,14 +25,17 @@ import (
 	"os"
 
 	"github.com/uber-go/tally"
+	"go.uber.org/zap"
+
 	"github.com/uber/cadence/client"
-	frontendclient "github.com/uber/cadence/client/frontend"
+	adminClient "github.com/uber/cadence/client/admin"
 	"github.com/uber/cadence/common"
 	"github.com/uber/cadence/common/archiver"
 	"github.com/uber/cadence/common/archiver/filestore"
 	"github.com/uber/cadence/common/archiver/provider"
 	"github.com/uber/cadence/common/cluster"
 	"github.com/uber/cadence/common/definition"
+	"github.com/uber/cadence/common/domain"
 	"github.com/uber/cadence/common/elasticsearch"
 	"github.com/uber/cadence/common/log"
 	"github.com/uber/cadence/common/log/tag"
@@ -41,9 +44,9 @@ import (
 	"github.com/uber/cadence/common/persistence"
 	pes "github.com/uber/cadence/common/persistence/elasticsearch"
 	persistencetests "github.com/uber/cadence/common/persistence/persistence-tests"
+	"github.com/uber/cadence/common/persistence/sql/sqlplugin/mysql"
 	"github.com/uber/cadence/common/service/config"
 	"github.com/uber/cadence/common/service/dynamicconfig"
-	"go.uber.org/zap"
 )
 
 type (
@@ -77,7 +80,7 @@ type (
 		HistoryConfig         *HistoryConfig
 		ESConfig              *elasticsearch.Config
 		WorkerConfig          *WorkerConfig
-		MockFrontendClient    map[string]frontendclient.Client
+		MockAdminClient       map[string]adminClient.Client
 	}
 
 	// MessagingClientConfig is the config for messaging config
@@ -116,6 +119,20 @@ func NewCluster(options *TestClusterConfig, logger log.Logger) (*TestCluster, er
 	}
 
 	options.Persistence.StoreType = TestFlags.PersistenceType
+	if TestFlags.PersistenceType == config.StoreTypeSQL {
+		var ops *persistencetests.TestBaseOptions
+		if TestFlags.SQLPluginName == mysql.PluginName {
+			ops = mysql.GetTestClusterOption()
+		} else {
+			panic("not supported plugin " + TestFlags.SQLPluginName)
+		}
+		options.Persistence.SQLDBPluginName = TestFlags.SQLPluginName
+		options.Persistence.DBUsername = ops.DBUsername
+		options.Persistence.DBPassword = ops.DBPassword
+		options.Persistence.DBHost = ops.DBHost
+		options.Persistence.DBPort = ops.DBPort
+		options.Persistence.SchemaDir = ops.SchemaDir
+	}
 	options.Persistence.ClusterMetadata = clusterMetadata
 	testBase := persistencetests.NewTestBase(&options.Persistence)
 	testBase.Setup()
@@ -152,27 +169,28 @@ func NewCluster(options *TestClusterConfig, logger log.Logger) (*TestCluster, er
 	pConfig := testBase.Config()
 	pConfig.NumHistoryShards = options.HistoryConfig.NumHistoryShards
 	cadenceParams := &CadenceParams{
-		ClusterMetadata:        clusterMetadata,
-		PersistenceConfig:      pConfig,
-		DispatcherProvider:     client.NewDNSYarpcDispatcherProvider(logger, 0),
-		MessagingClient:        messagingClient,
-		MetadataMgr:            testBase.MetadataManager,
-		ShardMgr:               testBase.ShardMgr,
-		HistoryV2Mgr:           testBase.HistoryV2Mgr,
-		ExecutionMgrFactory:    testBase.ExecutionMgrFactory,
-		TaskMgr:                testBase.TaskMgr,
-		VisibilityMgr:          visibilityMgr,
-		Logger:                 logger,
-		ClusterNo:              options.ClusterNo,
-		EnableNDC:              options.EnableNDC,
-		ESConfig:               options.ESConfig,
-		ESClient:               esClient,
-		ArchiverMetadata:       archiverBase.metadata,
-		ArchiverProvider:       archiverBase.provider,
-		HistoryConfig:          options.HistoryConfig,
-		WorkerConfig:           options.WorkerConfig,
-		MockFrontendClient:     options.MockFrontendClient,
-		DomainReplicationQueue: testBase.DomainReplicationQueue,
+		ClusterMetadata:               clusterMetadata,
+		PersistenceConfig:             pConfig,
+		DispatcherProvider:            client.NewDNSYarpcDispatcherProvider(logger, 0),
+		MessagingClient:               messagingClient,
+		MetadataMgr:                   testBase.MetadataManager,
+		ShardMgr:                      testBase.ShardMgr,
+		HistoryV2Mgr:                  testBase.HistoryV2Mgr,
+		ExecutionMgrFactory:           testBase.ExecutionMgrFactory,
+		DomainReplicationQueue:        testBase.DomainReplicationQueue,
+		TaskMgr:                       testBase.TaskMgr,
+		VisibilityMgr:                 visibilityMgr,
+		Logger:                        logger,
+		ClusterNo:                     options.ClusterNo,
+		EnableNDC:                     options.EnableNDC,
+		ESConfig:                      options.ESConfig,
+		ESClient:                      esClient,
+		ArchiverMetadata:              archiverBase.metadata,
+		ArchiverProvider:              archiverBase.provider,
+		HistoryConfig:                 options.HistoryConfig,
+		WorkerConfig:                  options.WorkerConfig,
+		MockAdminClient:               options.MockAdminClient,
+		DomainReplicationTaskExecutor: domain.NewReplicationTaskExecutor(testBase.MetadataManager, logger),
 	}
 	cluster := NewCadence(cadenceParams)
 	if err := cluster.Start(); err != nil {
@@ -271,4 +289,9 @@ func (tc *TestCluster) GetAdminClient() AdminClient {
 // GetHistoryClient returns a history client from the test cluster
 func (tc *TestCluster) GetHistoryClient() HistoryClient {
 	return tc.host.GetHistoryClient()
+}
+
+// GetExecutionManagerFactory returns an execution manager factory from the test cluster
+func (tc *TestCluster) GetExecutionManagerFactory() persistence.ExecutionManagerFactory {
+	return tc.host.GetExecutionManagerFactory()
 }

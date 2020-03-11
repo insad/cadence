@@ -167,7 +167,6 @@ func (_m *ExecutionManager) DeleteTask(request *persistence.DeleteTaskRequest) e
 	return r0
 }
 
-
 // DeleteWorkflowExecution provides a mock function with given fields: request
 func (_m *ExecutionManager) DeleteWorkflowExecution(request *persistence.DeleteWorkflowExecutionRequest) error {
 	ret := _m.Called(request)
@@ -299,6 +298,91 @@ func (_m *ExecutionManager) CompleteReplicationTask(request *persistence.Complet
 
 	var r0 error
 	if rf, ok := ret.Get(0).(func(*persistence.CompleteReplicationTaskRequest) error); ok {
+		r0 = rf(request)
+	} else {
+		r0 = ret.Error(0)
+	}
+
+	return r0
+}
+
+// RangeCompleteReplicationTask provides a mock function with given fields: request
+func (_m *ExecutionManager) RangeCompleteReplicationTask(request *persistence.RangeCompleteReplicationTaskRequest) error {
+	ret := _m.Called(request)
+
+	var r0 error
+	if rf, ok := ret.Get(0).(func(*persistence.RangeCompleteReplicationTaskRequest) error); ok {
+		r0 = rf(request)
+	} else {
+		r0 = ret.Error(0)
+	}
+
+	return r0
+}
+
+// PutReplicationTaskToDLQ provides a mock function with given fields: request
+func (_m *ExecutionManager) PutReplicationTaskToDLQ(request *persistence.PutReplicationTaskToDLQRequest) error {
+	ret := _m.Called(request)
+
+	var r0 error
+	if rf, ok := ret.Get(0).(func(*persistence.PutReplicationTaskToDLQRequest) error); ok {
+		r0 = rf(request)
+	} else {
+		r0 = ret.Error(0)
+	}
+
+	return r0
+}
+
+// GetReplicationTasksFromDLQ provides a mock function with given fields: request
+func (_m *ExecutionManager) GetReplicationTasksFromDLQ(request *persistence.GetReplicationTasksFromDLQRequest) (*persistence.GetReplicationTasksFromDLQResponse, error) {
+	ret := _m.Called(request)
+
+	var r0 *persistence.GetReplicationTasksFromDLQResponse
+	if rf, ok := ret.Get(0).(func(*persistence.GetReplicationTasksFromDLQRequest) *persistence.GetReplicationTasksFromDLQResponse); ok {
+		r0 = rf(request)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).(*persistence.GetReplicationTasksFromDLQResponse)
+		}
+	}
+
+	var r1 error
+	if rf, ok := ret.Get(1).(func(*persistence.GetReplicationTasksFromDLQRequest) error); ok {
+		r1 = rf(request)
+	} else {
+		r1 = ret.Error(1)
+	}
+
+	return r0, r1
+}
+
+// DeleteReplicationTaskFromDLQ provides a mock function with given fields: request
+func (_m *ExecutionManager) DeleteReplicationTaskFromDLQ(
+	request *persistence.DeleteReplicationTaskFromDLQRequest,
+) error {
+
+	ret := _m.Called(request)
+
+	var r0 error
+	if rf, ok := ret.Get(0).(func(*persistence.DeleteReplicationTaskFromDLQRequest) error); ok {
+		r0 = rf(request)
+	} else {
+		r0 = ret.Error(0)
+	}
+
+	return r0
+}
+
+// RangeDeleteReplicationTaskFromDLQ provides a mock function with given fields: request
+func (_m *ExecutionManager) RangeDeleteReplicationTaskFromDLQ(
+	request *persistence.RangeDeleteReplicationTaskFromDLQRequest,
+) error {
+
+	ret := _m.Called(request)
+
+	var r0 error
+	if rf, ok := ret.Get(0).(func(*persistence.RangeDeleteReplicationTaskFromDLQRequest) error); ok {
 		r0 = rf(request)
 	} else {
 		r0 = ret.Error(0)

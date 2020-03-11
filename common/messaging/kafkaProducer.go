@@ -22,8 +22,10 @@ package messaging
 
 import (
 	"errors"
+	"fmt"
 
 	"github.com/Shopify/sarama"
+
 	"github.com/uber/cadence/.gen/go/indexer"
 	"github.com/uber/cadence/.gen/go/replicator"
 	"github.com/uber/cadence/common/codec"
@@ -96,30 +98,41 @@ func (p *kafkaProducer) getKeyForReplicationTask(task *replicator.ReplicationTas
 	switch task.GetTaskType() {
 	case replicator.ReplicationTaskTypeHistory:
 		// Use workflowID as the partition key so all replication tasks for a workflow are dispatched to the same
-		// Kafka partition.  This will give us some ordering guarantee for workflow replication tasks atleast at
+		// Kafka partition.  This will give us some ordering guarantee for workflow replication tasks at least at
 		// the messaging layer perspective
 		attributes := task.HistoryTaskAttributes
+		return sarama.StringEncoder(attributes.GetWorkflowId())
+	case replicator.ReplicationTaskTypeHistoryV2:
+		// Use workflowID as the partition key so all replication tasks for a workflow are dispatched to the same
+		// Kafka partition.  This will give us some ordering guarantee for workflow replication tasks at least at
+		// the messaging layer perspective
+		attributes := task.HistoryTaskV2Attributes
 		return sarama.StringEncoder(attributes.GetWorkflowId())
 	case replicator.ReplicationTaskTypeSyncActivity:
 		// Use workflowID as the partition key so all sync activity tasks for a workflow are dispatched to the same
 		// Kafka partition.  This will give us some ordering guarantee for workflow replication tasks atleast at
 		// the messaging layer perspective
-		attributes := task.SyncActicvityTaskAttributes
+		attributes := task.SyncActivityTaskAttributes
 		return sarama.StringEncoder(attributes.GetWorkflowId())
+	case replicator.ReplicationTaskTypeHistoryMetadata,
+		replicator.ReplicationTaskTypeDomain,
+		replicator.ReplicationTaskTypeSyncShardStatus:
+		return nil
+	default:
+		panic(fmt.Sprintf("encounter unsupported replication task type: %v", task.GetTaskType()))
 	}
 
 	return nil
 }
 
 func (p *kafkaProducer) getProducerMessage(message interface{}) (*sarama.ProducerMessage, error) {
-	switch message.(type) {
+	switch message := message.(type) {
 	case *replicator.ReplicationTask:
-		task := message.(*replicator.ReplicationTask)
-		payload, err := p.serializeThrift(task)
+		payload, err := p.serializeThrift(message)
 		if err != nil {
 			return nil, err
 		}
-		partitionKey := p.getKeyForReplicationTask(task)
+		partitionKey := p.getKeyForReplicationTask(message)
 		msg := &sarama.ProducerMessage{
 			Topic: p.topic,
 			Key:   partitionKey,
@@ -127,14 +140,13 @@ func (p *kafkaProducer) getProducerMessage(message interface{}) (*sarama.Produce
 		}
 		return msg, nil
 	case *indexer.Message:
-		indexMsg := message.(*indexer.Message)
-		payload, err := p.serializeThrift(indexMsg)
+		payload, err := p.serializeThrift(message)
 		if err != nil {
 			return nil, err
 		}
 		msg := &sarama.ProducerMessage{
 			Topic: p.topic,
-			Key:   sarama.StringEncoder(indexMsg.GetWorkflowID()),
+			Key:   sarama.StringEncoder(message.GetWorkflowID()),
 			Value: sarama.ByteEncoder(payload),
 		}
 		return msg, nil

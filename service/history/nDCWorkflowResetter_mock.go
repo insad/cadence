@@ -1,6 +1,6 @@
 // The MIT License (MIT)
 //
-// Copyright (c) 2019 Uber Technologies, Inc.
+// Copyright (c) 2020 Uber Technologies, Inc.
 //
 // Permission is hereby granted, free of charge, to any person obtaining a copy
 // of this software and associated documentation files (the "Software"), to deal
@@ -59,16 +59,16 @@ func (m *MocknDCWorkflowResetter) EXPECT() *MocknDCWorkflowResetterMockRecorder 
 }
 
 // resetWorkflow mocks base method
-func (m *MocknDCWorkflowResetter) resetWorkflow(ctx context.Context, now time.Time, baseEventID, baseVersion int64) (mutableState, error) {
+func (m *MocknDCWorkflowResetter) resetWorkflow(ctx context.Context, now time.Time, baseLastEventID, baseLastEventVersion, incomingFirstEventID, incomingFirstEventVersion int64) (mutableState, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "resetWorkflow", ctx, now, baseEventID, baseVersion)
+	ret := m.ctrl.Call(m, "resetWorkflow", ctx, now, baseLastEventID, baseLastEventVersion, incomingFirstEventID, incomingFirstEventVersion)
 	ret0, _ := ret[0].(mutableState)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // resetWorkflow indicates an expected call of resetWorkflow
-func (mr *MocknDCWorkflowResetterMockRecorder) resetWorkflow(ctx, now, baseEventID, baseVersion interface{}) *gomock.Call {
+func (mr *MocknDCWorkflowResetterMockRecorder) resetWorkflow(ctx, now, baseLastEventID, baseLastEventVersion, incomingFirstEventID, incomingFirstEventVersion interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "resetWorkflow", reflect.TypeOf((*MocknDCWorkflowResetter)(nil).resetWorkflow), ctx, now, baseEventID, baseVersion)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "resetWorkflow", reflect.TypeOf((*MocknDCWorkflowResetter)(nil).resetWorkflow), ctx, now, baseLastEventID, baseLastEventVersion, incomingFirstEventID, incomingFirstEventVersion)
 }

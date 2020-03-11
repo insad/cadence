@@ -27,6 +27,9 @@ import (
 	"math/rand"
 	"time"
 
+	"go.uber.org/cadence/.gen/go/cadence/workflowserviceclient"
+	cclient "go.uber.org/cadence/client"
+
 	"github.com/uber/cadence/.gen/go/shared"
 	"github.com/uber/cadence/common"
 	carchiver "github.com/uber/cadence/common/archiver"
@@ -36,8 +39,6 @@ import (
 	"github.com/uber/cadence/common/metrics"
 	"github.com/uber/cadence/common/quotas"
 	"github.com/uber/cadence/common/service/dynamicconfig"
-	"go.uber.org/cadence/.gen/go/cadence/workflowserviceclient"
-	cclient "go.uber.org/cadence/client"
 )
 
 type (
@@ -79,7 +80,7 @@ type (
 		VisibilityURI      string
 
 		// archival targets: history and/or visibility
-		Targets []archivalTarget
+		Targets []ArchivalTarget
 	}
 
 	// Client is used to archive workflow histories
@@ -96,7 +97,8 @@ type (
 		archiverProvider provider.ArchiverProvider
 	}
 
-	archivalTarget int
+	// ArchivalTarget is either history or visibility
+	ArchivalTarget int
 )
 
 const (
@@ -107,7 +109,7 @@ const (
 
 const (
 	// ArchiveTargetHistory is the archive target for workflow history
-	ArchiveTargetHistory archivalTarget = iota
+	ArchiveTargetHistory ArchivalTarget = iota
 	// ArchiveTargetVisibility is the archive target for workflow visibility record
 	ArchiveTargetVisibility
 )
@@ -137,6 +139,14 @@ func NewClient(
 
 // Archive starts an archival task
 func (c *client) Archive(ctx context.Context, request *ClientRequest) (*ClientResponse, error) {
+	for _, target := range request.ArchiveRequest.Targets {
+		switch target {
+		case ArchiveTargetHistory:
+			c.metricsScope.IncCounter(metrics.ArchiverClientHistoryRequestCount)
+		case ArchiveTargetVisibility:
+			c.metricsScope.IncCounter(metrics.ArchiverClientVisibilityRequestCount)
+		}
+	}
 	logger := c.logger.WithTags(
 		tag.ArchivalCallerServiceName(request.CallerService),
 		tag.ArchivalArchiveAttemptedInline(request.AttemptArchiveInline),
@@ -159,7 +169,7 @@ func (c *client) Archive(ctx context.Context, request *ClientRequest) (*ClientRe
 			}
 		}
 
-		targets := []archivalTarget{}
+		targets := []ArchivalTarget{}
 		for i, target := range request.ArchiveRequest.Targets {
 			if <-results[i] != nil {
 				targets = append(targets, target)
@@ -250,7 +260,7 @@ func (c *client) archiveVisibilityInline(ctx context.Context, request *ClientReq
 }
 
 func (c *client) sendArchiveSignal(ctx context.Context, request *ArchiveRequest, taggedLogger log.Logger) error {
-	fmt.Println(request.Targets)
+	c.metricsScope.IncCounter(metrics.ArchiverClientSendSignalCount)
 	if ok := c.rateLimiter.Allow(); !ok {
 		c.logger.Error(tooManyRequestsErrMsg)
 		c.metricsScope.IncCounter(metrics.CadenceErrServiceBusyCounter)

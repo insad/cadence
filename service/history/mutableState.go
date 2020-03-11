@@ -18,6 +18,8 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 // THE SOFTWARE.
 
+//go:generate mockgen -copyright_file ../../LICENSE -package $GOPACKAGE -source $GOFILE -destination mutableState_mock.go
+
 package history
 
 import (
@@ -26,6 +28,7 @@ import (
 	h "github.com/uber/cadence/.gen/go/history"
 	workflow "github.com/uber/cadence/.gen/go/shared"
 	"github.com/uber/cadence/common/cache"
+	"github.com/uber/cadence/common/definition"
 	"github.com/uber/cadence/common/persistence"
 )
 
@@ -52,13 +55,6 @@ type (
 	}
 
 	mutableState interface {
-		AddInMemoryDecisionTaskScheduled(time.Duration) error
-		AddInMemoryDecisionTaskStarted() error
-		DeleteInMemoryDecisionTask()
-		HasScheduledInMemoryDecisionTask() bool
-		HasStartedInMemoryDecisionTask() bool
-		HasInMemoryDecisionTask() bool
-
 		AddActivityTaskCancelRequestedEvent(int64, string, string) (*workflow.HistoryEvent, *persistence.ActivityInfo, error)
 		AddActivityTaskCanceledEvent(int64, int64, int64, []uint8, string) (*workflow.HistoryEvent, error)
 		AddActivityTaskCompletedEvent(int64, int64, *workflow.RespondActivityTaskCompletedRequest) (*workflow.HistoryEvent, error)
@@ -76,7 +72,7 @@ type (
 		AddCompletedWorkflowEvent(int64, *workflow.CompleteWorkflowExecutionDecisionAttributes) (*workflow.HistoryEvent, error)
 		AddContinueAsNewEvent(int64, int64, string, *workflow.ContinueAsNewWorkflowExecutionDecisionAttributes) (*workflow.HistoryEvent, mutableState, error)
 		AddDecisionTaskCompletedEvent(int64, int64, *workflow.RespondDecisionTaskCompletedRequest, int) (*workflow.HistoryEvent, error)
-		AddDecisionTaskFailedEvent(scheduleEventID int64, startedEventID int64, cause workflow.DecisionTaskFailedCause, details []byte, identity, reason, baseRunID, newRunID string, forkEventVersion int64) (*workflow.HistoryEvent, error)
+		AddDecisionTaskFailedEvent(scheduleEventID int64, startedEventID int64, cause workflow.DecisionTaskFailedCause, details []byte, identity, reason, binChecksum, baseRunID, newRunID string, forkEventVersion int64) (*workflow.HistoryEvent, error)
 		AddDecisionTaskScheduleToStartTimeoutEvent(int64) (*workflow.HistoryEvent, error)
 		AddFirstDecisionTaskScheduled(*workflow.HistoryEvent) error
 		AddDecisionTaskScheduledEvent(bypassTaskGeneration bool) (*decisionInfo, error)
@@ -95,16 +91,16 @@ type (
 		AddSignalRequested(requestID string)
 		AddStartChildWorkflowExecutionFailedEvent(int64, workflow.ChildWorkflowExecutionFailedCause, *workflow.StartChildWorkflowExecutionInitiatedEventAttributes) (*workflow.HistoryEvent, error)
 		AddStartChildWorkflowExecutionInitiatedEvent(int64, string, *workflow.StartChildWorkflowExecutionDecisionAttributes) (*workflow.HistoryEvent, *persistence.ChildExecutionInfo, error)
-		AddTimeoutWorkflowEvent() (*workflow.HistoryEvent, error)
+		AddTimeoutWorkflowEvent(int64) (*workflow.HistoryEvent, error)
 		AddTimerCanceledEvent(int64, *workflow.CancelTimerDecisionAttributes, string) (*workflow.HistoryEvent, error)
-		AddTimerFiredEvent(int64, string) (*workflow.HistoryEvent, error)
+		AddTimerFiredEvent(string) (*workflow.HistoryEvent, error)
 		AddTimerStartedEvent(int64, *workflow.StartTimerDecisionAttributes) (*workflow.HistoryEvent, *persistence.TimerInfo, error)
 		AddUpsertWorkflowSearchAttributesEvent(int64, *workflow.UpsertWorkflowSearchAttributesDecisionAttributes) (*workflow.HistoryEvent, error)
 		AddWorkflowExecutionCancelRequestedEvent(string, *h.RequestCancelWorkflowExecutionRequest) (*workflow.HistoryEvent, error)
 		AddWorkflowExecutionCanceledEvent(int64, *workflow.CancelWorkflowExecutionDecisionAttributes) (*workflow.HistoryEvent, error)
 		AddWorkflowExecutionSignaled(signalName string, input []byte, identity string) (*workflow.HistoryEvent, error)
 		AddWorkflowExecutionStartedEvent(workflow.WorkflowExecution, *h.StartWorkflowExecutionRequest) (*workflow.HistoryEvent, error)
-		AddWorkflowExecutionTerminatedEvent(reason string, details []byte, identity string) (*workflow.HistoryEvent, error)
+		AddWorkflowExecutionTerminatedEvent(firstEventID int64, reason string, details []byte, identity string) (*workflow.HistoryEvent, error)
 		ClearStickyness()
 		CheckResettable() error
 		CopyToPersistence() *persistence.WorkflowMutableState
@@ -112,13 +108,8 @@ type (
 		CreateNewHistoryEvent(eventType workflow.EventType) *workflow.HistoryEvent
 		CreateNewHistoryEventWithTimestamp(eventType workflow.EventType, timestamp int64) *workflow.HistoryEvent
 		CreateTransientDecisionEvents(di *decisionInfo, identity string) (*workflow.HistoryEvent, *workflow.HistoryEvent)
-		DeleteActivity(int64) error
 		DeleteDecision()
-		DeletePendingChildExecution(int64)
-		DeletePendingRequestCancel(int64)
 		DeleteSignalRequested(requestID string)
-		DeletePendingSignal(int64)
-		DeleteUserTimer(string)
 		FailDecision(bool)
 		FlushBufferedEvents() error
 		GetActivityByActivityID(string) (*persistence.ActivityInfo, bool)
@@ -150,10 +141,10 @@ type (
 		GetRequestCancelInfo(int64) (*persistence.RequestCancelInfo, bool)
 		GetRetryBackoffDuration(errReason string) time.Duration
 		GetCronBackoffDuration() (time.Duration, error)
-		GetScheduleIDByActivityID(string) (int64, error)
 		GetSignalInfo(int64) (*persistence.SignalInfo, bool)
 		GetStartVersion() (int64, error)
-		GetUserTimer(string) (*persistence.TimerInfo, bool)
+		GetUserTimerInfoByEventID(int64) (*persistence.TimerInfo, bool)
+		GetUserTimerInfo(string) (*persistence.TimerInfo, bool)
 		GetWorkflowType() *workflow.WorkflowType
 		GetWorkflowStateCloseStatus() (int, int)
 		GetQueryRegistry() queryRegistry
@@ -167,6 +158,8 @@ type (
 		IsSignalRequested(requestID string) bool
 		IsStickyTaskListEnabled() bool
 		IsWorkflowExecutionRunning() bool
+		IsResourceDuplicated(resourceDedupKey definition.DeduplicationID) bool
+		UpdateDuplicatedResource(resourceDedupKey definition.DeduplicationID)
 		Load(*persistence.WorkflowMutableState)
 		ReplicateActivityInfo(*h.SyncActivityRequest, bool) error
 		ReplicateActivityTaskCancelRequestedEvent(*workflow.HistoryEvent) error
@@ -218,7 +211,7 @@ type (
 		UpdateDecision(*decisionInfo)
 		UpdateReplicationStateVersion(int64, bool)
 		UpdateReplicationStateLastEventID(int64, int64)
-		UpdateUserTimer(string, *persistence.TimerInfo)
+		UpdateUserTimer(*persistence.TimerInfo) error
 		UpdateCurrentVersion(version int64, forceUpdate bool) error
 		UpdateWorkflowStateCloseStatus(state int, closeStatus int) error
 

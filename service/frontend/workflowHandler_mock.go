@@ -1,6 +1,6 @@
 // The MIT License (MIT)
 //
-// Copyright (c) 2017 Uber Technologies, Inc.
+// Copyright (c) 2020 Uber Technologies, Inc.
 //
 // Permission is hereby granted, free of charge, to any person obtaining a copy
 // of this software and associated documentation files (the "Software"), to deal
@@ -32,7 +32,7 @@ import (
 	reflect "reflect"
 
 	gomock "github.com/golang/mock/gomock"
-	replicator "github.com/uber/cadence/.gen/go/replicator"
+
 	shared "github.com/uber/cadence/.gen/go/shared"
 )
 
@@ -133,34 +133,19 @@ func (mr *MockWorkflowHandlerMockRecorder) DescribeWorkflowExecution(ctx, Descri
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DescribeWorkflowExecution", reflect.TypeOf((*MockWorkflowHandler)(nil).DescribeWorkflowExecution), ctx, DescribeRequest)
 }
 
-// GetDomainReplicationMessages mocks base method
-func (m *MockWorkflowHandler) GetDomainReplicationMessages(ctx context.Context, Request *replicator.GetDomainReplicationMessagesRequest) (*replicator.GetDomainReplicationMessagesResponse, error) {
+// GetClusterInfo mocks base method
+func (m *MockWorkflowHandler) GetClusterInfo(ctx context.Context) (*shared.ClusterInfo, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "GetDomainReplicationMessages", ctx, Request)
-	ret0, _ := ret[0].(*replicator.GetDomainReplicationMessagesResponse)
+	ret := m.ctrl.Call(m, "GetClusterInfo", ctx)
+	ret0, _ := ret[0].(*shared.ClusterInfo)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
-// GetDomainReplicationMessages indicates an expected call of GetDomainReplicationMessages
-func (mr *MockWorkflowHandlerMockRecorder) GetDomainReplicationMessages(ctx, Request interface{}) *gomock.Call {
+// GetClusterInfo indicates an expected call of GetClusterInfo
+func (mr *MockWorkflowHandlerMockRecorder) GetClusterInfo(ctx interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetDomainReplicationMessages", reflect.TypeOf((*MockWorkflowHandler)(nil).GetDomainReplicationMessages), ctx, Request)
-}
-
-// GetReplicationMessages mocks base method
-func (m *MockWorkflowHandler) GetReplicationMessages(ctx context.Context, Request *replicator.GetReplicationMessagesRequest) (*replicator.GetReplicationMessagesResponse, error) {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "GetReplicationMessages", ctx, Request)
-	ret0, _ := ret[0].(*replicator.GetReplicationMessagesResponse)
-	ret1, _ := ret[1].(error)
-	return ret0, ret1
-}
-
-// GetReplicationMessages indicates an expected call of GetReplicationMessages
-func (mr *MockWorkflowHandlerMockRecorder) GetReplicationMessages(ctx, Request interface{}) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetReplicationMessages", reflect.TypeOf((*MockWorkflowHandler)(nil).GetReplicationMessages), ctx, Request)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetClusterInfo", reflect.TypeOf((*MockWorkflowHandler)(nil).GetClusterInfo), ctx)
 }
 
 // GetSearchAttributes mocks base method
@@ -191,6 +176,21 @@ func (m *MockWorkflowHandler) GetWorkflowExecutionHistory(ctx context.Context, G
 func (mr *MockWorkflowHandlerMockRecorder) GetWorkflowExecutionHistory(ctx, GetRequest interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetWorkflowExecutionHistory", reflect.TypeOf((*MockWorkflowHandler)(nil).GetWorkflowExecutionHistory), ctx, GetRequest)
+}
+
+// GetWorkflowExecutionRawHistory mocks base method
+func (m *MockWorkflowHandler) GetWorkflowExecutionRawHistory(ctx context.Context, GetRequest *shared.GetWorkflowExecutionRawHistoryRequest) (*shared.GetWorkflowExecutionRawHistoryResponse, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetWorkflowExecutionRawHistory", ctx, GetRequest)
+	ret0, _ := ret[0].(*shared.GetWorkflowExecutionRawHistoryResponse)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// GetWorkflowExecutionRawHistory indicates an expected call of GetWorkflowExecutionRawHistory
+func (mr *MockWorkflowHandlerMockRecorder) GetWorkflowExecutionRawHistory(ctx, GetRequest interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetWorkflowExecutionRawHistory", reflect.TypeOf((*MockWorkflowHandler)(nil).GetWorkflowExecutionRawHistory), ctx, GetRequest)
 }
 
 // ListArchivedWorkflowExecutions mocks base method
@@ -253,6 +253,21 @@ func (mr *MockWorkflowHandlerMockRecorder) ListOpenWorkflowExecutions(ctx, ListR
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ListOpenWorkflowExecutions", reflect.TypeOf((*MockWorkflowHandler)(nil).ListOpenWorkflowExecutions), ctx, ListRequest)
 }
 
+// ListTaskListPartitions mocks base method
+func (m *MockWorkflowHandler) ListTaskListPartitions(ctx context.Context, Request *shared.ListTaskListPartitionsRequest) (*shared.ListTaskListPartitionsResponse, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "ListTaskListPartitions", ctx, Request)
+	ret0, _ := ret[0].(*shared.ListTaskListPartitionsResponse)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// ListTaskListPartitions indicates an expected call of ListTaskListPartitions
+func (mr *MockWorkflowHandlerMockRecorder) ListTaskListPartitions(ctx, Request interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ListTaskListPartitions", reflect.TypeOf((*MockWorkflowHandler)(nil).ListTaskListPartitions), ctx, Request)
+}
+
 // ListWorkflowExecutions mocks base method
 func (m *MockWorkflowHandler) ListWorkflowExecutions(ctx context.Context, ListRequest *shared.ListWorkflowExecutionsRequest) (*shared.ListWorkflowExecutionsResponse, error) {
 	m.ctrl.T.Helper()
@@ -296,6 +311,21 @@ func (m *MockWorkflowHandler) PollForDecisionTask(ctx context.Context, PollReque
 func (mr *MockWorkflowHandlerMockRecorder) PollForDecisionTask(ctx, PollRequest interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "PollForDecisionTask", reflect.TypeOf((*MockWorkflowHandler)(nil).PollForDecisionTask), ctx, PollRequest)
+}
+
+// PollForWorkflowExecutionRawHistory mocks base method
+func (m *MockWorkflowHandler) PollForWorkflowExecutionRawHistory(ctx context.Context, GetRequest *shared.PollForWorkflowExecutionRawHistoryRequest) (*shared.PollForWorkflowExecutionRawHistoryResponse, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "PollForWorkflowExecutionRawHistory", ctx, GetRequest)
+	ret0, _ := ret[0].(*shared.PollForWorkflowExecutionRawHistoryResponse)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// PollForWorkflowExecutionRawHistory indicates an expected call of PollForWorkflowExecutionRawHistory
+func (mr *MockWorkflowHandlerMockRecorder) PollForWorkflowExecutionRawHistory(ctx, GetRequest interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "PollForWorkflowExecutionRawHistory", reflect.TypeOf((*MockWorkflowHandler)(nil).PollForWorkflowExecutionRawHistory), ctx, GetRequest)
 }
 
 // QueryWorkflow mocks base method
@@ -614,12 +644,4 @@ func (m *MockWorkflowHandler) UpdateDomain(ctx context.Context, UpdateRequest *s
 func (mr *MockWorkflowHandlerMockRecorder) UpdateDomain(ctx, UpdateRequest interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "UpdateDomain", reflect.TypeOf((*MockWorkflowHandler)(nil).UpdateDomain), ctx, UpdateRequest)
-}
-
-// UpdateDomain mocks base method
-func (m *MockWorkflowHandler) ReapplyEvents(ctx context.Context, ReapplyEventsRequest *shared.ReapplyEventsRequest) error {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "ReapplyEvents", ctx, ReapplyEventsRequest)
-	ret0, _ := ret[0].(error)
-	return ret0
 }

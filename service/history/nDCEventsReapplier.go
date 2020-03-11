@@ -25,7 +25,10 @@ package history
 import (
 	ctx "context"
 
+	"go.uber.org/cadence/.gen/go/shared"
+
 	workflow "github.com/uber/cadence/.gen/go/shared"
+	"github.com/uber/cadence/common/definition"
 	"github.com/uber/cadence/common/log"
 	"github.com/uber/cadence/common/metrics"
 )
@@ -36,7 +39,8 @@ type (
 			ctx ctx.Context,
 			msBuilder mutableState,
 			historyEvents []*workflow.HistoryEvent,
-		) error
+			runID string,
+		) ([]*workflow.HistoryEvent, error)
 	}
 
 	nDCEventsReapplierImpl struct {
@@ -60,38 +64,44 @@ func (r *nDCEventsReapplierImpl) reapplyEvents(
 	ctx ctx.Context,
 	msBuilder mutableState,
 	historyEvents []*workflow.HistoryEvent,
-) error {
+	runID string,
+) ([]*workflow.HistoryEvent, error) {
 
-	var reapplyEvents []*workflow.HistoryEvent
-	// TODO: need to implement Reapply policy
+	var reappliedEvents []*workflow.HistoryEvent
 	for _, event := range historyEvents {
 		switch event.GetEventType() {
 		case workflow.EventTypeWorkflowExecutionSignaled:
-			reapplyEvents = append(reapplyEvents, event)
+			dedupResource := definition.NewEventReappliedID(runID, event.GetEventId(), event.GetVersion())
+			if msBuilder.IsResourceDuplicated(dedupResource) {
+				// skip already applied event
+				continue
+			}
+			reappliedEvents = append(reappliedEvents, event)
 		}
 	}
 
-	if len(reapplyEvents) == 0 {
-		return nil
+	if len(reappliedEvents) == 0 {
+		return nil, nil
 	}
 
+	// sanity check workflow still running
 	if !msBuilder.IsWorkflowExecutionRunning() {
-		// TODO when https://github.com/uber/cadence/issues/2420 is finished
-		//  reset to workflow finish event
-		//  ignore this case for now
-		return nil
+		return nil, &shared.InternalServiceError{
+			Message: "unable to reapply events to closed workflow.",
+		}
 	}
 
-	// TODO: need to have signal deduplicate logic
-	for _, event := range reapplyEvents {
+	for _, event := range reappliedEvents {
 		signal := event.GetWorkflowExecutionSignaledEventAttributes()
 		if _, err := msBuilder.AddWorkflowExecutionSignaled(
 			signal.GetSignalName(),
 			signal.GetInput(),
 			signal.GetIdentity(),
 		); err != nil {
-			return err
+			return nil, err
 		}
+		deDupResource := definition.NewEventReappliedID(runID, event.GetEventId(), event.GetVersion())
+		msBuilder.UpdateDuplicatedResource(deDupResource)
 	}
-	return nil
+	return reappliedEvents, nil
 }

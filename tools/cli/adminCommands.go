@@ -27,7 +27,13 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/uber/cadence/common/auth"
+
+	"github.com/uber/cadence/common/service/config"
+
 	"github.com/gocql/gocql"
+	"github.com/urfave/cli"
+
 	"github.com/uber/cadence/.gen/go/admin"
 	"github.com/uber/cadence/.gen/go/shared"
 	"github.com/uber/cadence/common"
@@ -36,7 +42,6 @@ import (
 	"github.com/uber/cadence/common/persistence"
 	cassp "github.com/uber/cadence/common/persistence/cassandra"
 	"github.com/uber/cadence/tools/cassandra"
-	"github.com/urfave/cli"
 )
 
 const maxEventID = 9999
@@ -262,16 +267,29 @@ func readOneRow(query *gocql.Query) (map[string]interface{}, error) {
 }
 
 func connectToCassandra(c *cli.Context) *gocql.Session {
-	host := getRequiredOption(c, FlagAddress)
-	if !c.IsSet(FlagPort) {
-		ErrorAndExit("port is required", nil)
+	host := getRequiredOption(c, FlagDBAddress)
+	if !c.IsSet(FlagDBPort) {
+		ErrorAndExit("cassandra port is required", nil)
 	}
-	port := c.Int(FlagPort)
-	user := c.String(FlagUsername)
-	pw := c.String(FlagPassword)
-	ksp := getRequiredOption(c, FlagKeyspace)
 
-	clusterCfg, err := cassandra.NewCassandraCluster(host, port, user, pw, ksp, 10)
+	cassandraConfig := &config.Cassandra{
+		Hosts:    host,
+		Port:     c.Int(FlagDBPort),
+		User:     c.String(FlagUsername),
+		Password: c.String(FlagPassword),
+		Keyspace: getRequiredOption(c, FlagKeyspace),
+	}
+	if c.Bool(FlagEnableTLS) {
+		cassandraConfig.TLS = &auth.TLS{
+			Enabled:                true,
+			CertFile:               c.String(FlagTLSCertPath),
+			KeyFile:                c.String(FlagTLSKeyPath),
+			CaFile:                 c.String(FlagTLSCaPath),
+			EnableHostVerification: c.Bool(FlagTLSEnableHostVerification),
+		}
+	}
+
+	clusterCfg, err := cassandra.NewCassandraCluster(cassandraConfig, 10)
 	clusterCfg.SerialConsistency = gocql.LocalSerial
 	clusterCfg.NumConns = 20
 	if err != nil {
@@ -419,4 +437,29 @@ func AdminDescribeHistoryHost(c *cli.Context) {
 		resp.ShardIDs = nil
 	}
 	prettyPrintJSONObject(resp)
+}
+
+// AdminRefreshWorkflowTasks refreshes all the tasks of a workflow
+func AdminRefreshWorkflowTasks(c *cli.Context) {
+	adminClient := cFactory.ServerAdminClient(c)
+
+	domain := getRequiredGlobalOption(c, FlagDomain)
+	wid := getRequiredOption(c, FlagWorkflowID)
+	rid := c.String(FlagRunID)
+
+	ctx, cancel := newContext(c)
+	defer cancel()
+
+	err := adminClient.RefreshWorkflowTasks(ctx, &shared.RefreshWorkflowTasksRequest{
+		Domain: common.StringPtr(domain),
+		Execution: &shared.WorkflowExecution{
+			WorkflowId: common.StringPtr(wid),
+			RunId:      common.StringPtr(rid),
+		},
+	})
+	if err != nil {
+		ErrorAndExit("Refresh workflow task failed", err)
+	} else {
+		fmt.Println("Refresh workflow task succeeded.")
+	}
 }

@@ -25,11 +25,12 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/xwb1989/sqlparser"
+
 	workflow "github.com/uber/cadence/.gen/go/shared"
 	"github.com/uber/cadence/common"
 	"github.com/uber/cadence/common/definition"
 	"github.com/uber/cadence/common/service/dynamicconfig"
-	"github.com/xwb1989/sqlparser"
 )
 
 // VisibilityQueryValidator for sql query validation
@@ -118,7 +119,7 @@ func (qv *VisibilityQueryValidator) validateWhereExpr(expr sqlparser.Expr) error
 		return nil
 	}
 
-	switch expr.(type) {
+	switch expr := expr.(type) {
 	case *sqlparser.AndExpr, *sqlparser.OrExpr:
 		return qv.validateAndOrExpr(expr)
 	case *sqlparser.ComparisonExpr:
@@ -126,28 +127,24 @@ func (qv *VisibilityQueryValidator) validateWhereExpr(expr sqlparser.Expr) error
 	case *sqlparser.RangeCond:
 		return qv.validateRangeExpr(expr)
 	case *sqlparser.ParenExpr:
-		parentExpr := expr.(*sqlparser.ParenExpr)
-		return qv.validateWhereExpr(parentExpr.Expr)
+		return qv.validateWhereExpr(expr.Expr)
 	default:
 		return errors.New("invalid where clause")
 	}
 
-	return nil
 }
 
 func (qv *VisibilityQueryValidator) validateAndOrExpr(expr sqlparser.Expr) error {
 	var leftExpr sqlparser.Expr
 	var rightExpr sqlparser.Expr
 
-	switch expr.(type) {
+	switch expr := expr.(type) {
 	case *sqlparser.AndExpr:
-		andExpr := expr.(*sqlparser.AndExpr)
-		leftExpr = andExpr.Left
-		rightExpr = andExpr.Right
+		leftExpr = expr.Left
+		rightExpr = expr.Right
 	case *sqlparser.OrExpr:
-		orExpr := expr.(*sqlparser.OrExpr)
-		leftExpr = orExpr.Left
-		rightExpr = orExpr.Right
+		leftExpr = expr.Left
+		rightExpr = expr.Right
 	}
 
 	if err := qv.validateWhereExpr(leftExpr); err != nil {

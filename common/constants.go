@@ -43,6 +43,8 @@ const (
 	FirstBlobPageToken = 1
 	// LastBlobNextPageToken is the next page token on the last blob for each history archival
 	LastBlobNextPageToken = -1
+	// EndMessageID is the id of the end message, here we use the int64 max
+	EndMessageID int64 = 1<<63 - 1
 )
 
 const (
@@ -68,9 +70,6 @@ const (
 type (
 	// EncodingType is an enum that represents various data encoding types
 	EncodingType string
-
-	// QueueType is an enum that represents various queue types
-	QueueType int
 )
 
 // MaxTaskTimeout is maximum task timeout allowed. 366 days in seconds
@@ -79,6 +78,8 @@ const MaxTaskTimeout = 31622400
 const (
 	// GetHistoryMaxPageSize is the max page size for get history
 	GetHistoryMaxPageSize = 1000
+	// ReadDLQMessagesPageSize is the max page size for read DLQ messages
+	ReadDLQMessagesPageSize = 1000
 )
 
 const (
@@ -109,6 +110,10 @@ const (
 	// CriticalLongPollTimeout is a threshold for the context timeout passed into long poll API,
 	// below which a warning will be logged
 	CriticalLongPollTimeout = time.Second * 20
+	// MaxWorkflowRetentionPeriodInDays is the maximum of workflow retention when registering domain
+	// !!! Do NOT simply decrease this number, because it is being used by history scavenger to avoid race condition against history archival.
+	// Check more details in history scanner(scavenger)
+	MaxWorkflowRetentionPeriodInDays = 30
 )
 
 const (
@@ -123,11 +128,6 @@ const (
 	ArchivalDisabled = "disabled"
 	// ArchivalPaused is the status for pausing archival
 	ArchivalPaused = "paused"
-)
-
-// Queue types used in queue table
-const (
-	DomainReplicationQueueType QueueType = 1
 )
 
 // enum for dynamic config AdvancedVisibilityWritingMode

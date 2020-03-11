@@ -29,6 +29,7 @@ import (
 	"github.com/pborman/uuid"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/suite"
+
 	"github.com/uber/cadence/.gen/go/shared"
 	"github.com/uber/cadence/common"
 	"github.com/uber/cadence/common/archiver"
@@ -49,7 +50,6 @@ type (
 
 		minRetentionDays     int
 		maxBadBinaryCount    int
-		logger               log.Logger
 		metadataMgr          persistence.MetadataManager
 		mockProducer         *mocks.KafkaProducer
 		mockDomainReplicator Replicator
@@ -149,7 +149,7 @@ func (s *domainHandlerGlobalDomainEnabledNotMasterClusterSuite) TestRegisterGetD
 	}, resp.DomainInfo)
 	s.Equal(&shared.DomainConfiguration{
 		WorkflowExecutionRetentionPeriodInDays: common.Int32Ptr(retention),
-		EmitMetric:                             common.BoolPtr(false),
+		EmitMetric:                             common.BoolPtr(true),
 		HistoryArchivalStatus:                  shared.ArchivalStatusDisabled.Ptr(),
 		HistoryArchivalURI:                     common.StringPtr(""),
 		VisibilityArchivalStatus:               shared.ArchivalStatusDisabled.Ptr(),
@@ -416,6 +416,7 @@ func (s *domainHandlerGlobalDomainEnabledNotMasterClusterSuite) TestRegisterGetD
 			ClusterName: common.StringPtr(replicationConfig.ClusterName),
 		})
 	}
+	s.Equal(1, len(clusters))
 
 	err := s.handler.RegisterDomain(context.Background(), &shared.RegisterDomainRequest{
 		Name:           common.StringPtr(domainName),

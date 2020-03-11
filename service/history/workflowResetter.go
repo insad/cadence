@@ -18,6 +18,8 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 // THE SOFTWARE.
 
+//go:generate mockgen -copyright_file ../../LICENSE -package $GOPACKAGE -source $GOFILE -destination workflowResetter_mock.go
+
 package history
 
 import (
@@ -31,7 +33,6 @@ import (
 	"github.com/uber/cadence/common/collection"
 	"github.com/uber/cadence/common/definition"
 	"github.com/uber/cadence/common/log"
-	"github.com/uber/cadence/common/log/tag"
 	"github.com/uber/cadence/common/persistence"
 )
 
@@ -61,9 +62,8 @@ type (
 		shard             ShardContext
 		domainCache       cache.DomainCache
 		clusterMetadata   cluster.Metadata
-		historyV2Mgr      persistence.HistoryV2Manager
+		historyV2Mgr      persistence.HistoryManager
 		historyCache      *historyCache
-		transactionMgr    nDCTransactionMgr
 		newStateRebuilder nDCStateRebuilderProvider
 		logger            log.Logger
 	}
@@ -74,16 +74,14 @@ var _ workflowResetter = (*workflowResetterImpl)(nil)
 func newWorkflowResetter(
 	shard ShardContext,
 	historyCache *historyCache,
-	transactionMgr nDCTransactionMgr,
 	logger log.Logger,
 ) *workflowResetterImpl {
 	return &workflowResetterImpl{
 		shard:           shard,
 		domainCache:     shard.GetDomainCache(),
 		clusterMetadata: shard.GetClusterMetadata(),
-		historyV2Mgr:    shard.GetHistoryV2Manager(),
+		historyV2Mgr:    shard.GetHistoryManager(),
 		historyCache:    historyCache,
-		transactionMgr:  transactionMgr,
 		newStateRebuilder: func() nDCStateRebuilder {
 			return newNDCStateRebuilder(shard, logger)
 		},
@@ -218,6 +216,7 @@ func (r *workflowResetterImpl) prepareResetWorkflow(
 		nil,
 		identityHistoryService,
 		resetReason,
+		"",
 		baseRunID,
 		resetRunID,
 		baseLastEventVersion,
@@ -416,19 +415,7 @@ func (r *workflowResetterImpl) generateBranchToken(
 		return nil, err
 	}
 
-	resetBranchToken := resp.NewBranchToken
-
-	if errComplete := r.historyV2Mgr.CompleteForkBranch(&persistence.CompleteForkBranchRequest{
-		BranchToken: resetBranchToken,
-		Success:     true, // past lessons learnt from Cassandra & gocql tells that we cannot possibly find all timeout errors
-		ShardID:     common.IntPtr(shardID),
-	}); errComplete != nil {
-		r.logger.WithTags(
-			tag.Error(errComplete),
-		).Error("workflowResetter unable to complete creation of new branch.")
-	}
-
-	return resetBranchToken, nil
+	return resp.NewBranchToken, nil
 }
 
 func (r *workflowResetterImpl) terminateWorkflow(
@@ -436,22 +423,14 @@ func (r *workflowResetterImpl) terminateWorkflow(
 	terminateReason string,
 ) error {
 
-	if decision, ok := mutableState.GetInFlightDecision(); ok {
-		if err := failDecision(
-			mutableState,
-			decision,
-			shared.DecisionTaskFailedCauseForceCloseDecision,
-		); err != nil {
-			return err
-		}
-	}
-
-	_, err := mutableState.AddWorkflowExecutionTerminatedEvent(
+	eventBatchFirstEventID := mutableState.GetNextEventID()
+	return terminateWorkflow(
+		mutableState,
+		eventBatchFirstEventID,
 		terminateReason,
 		nil,
 		identityHistoryService,
 	)
-	return err
 }
 
 func (r *workflowResetterImpl) reapplyContinueAsNewWorkflowEvents(
@@ -482,14 +461,27 @@ func (r *workflowResetterImpl) reapplyContinueAsNewWorkflowEvents(
 	}
 
 	getNextEventIDBranchToken := func(runID string) (nextEventID int64, branchToken []byte, retError error) {
-		workflow, err := r.transactionMgr.loadNDCWorkflow(ctx, domainID, workflowID, runID)
+		context, release, err := r.historyCache.getOrCreateWorkflowExecution(
+			ctx,
+			domainID,
+			shared.WorkflowExecution{
+				WorkflowId: common.StringPtr(workflowID),
+				RunId:      common.StringPtr(runID),
+			},
+		)
 		if err != nil {
 			return 0, nil, err
 		}
-		defer func() { workflow.getReleaseFn()(retError) }()
+		defer func() { release(retError) }()
 
-		nextEventID = workflow.getMutableState().GetNextEventID()
-		branchToken, err = workflow.getMutableState().GetCurrentBranchToken()
+		mutableState, err := context.loadWorkflowExecution()
+		if err != nil {
+			// no matter what error happen, we need to retry
+			return 0, nil, err
+		}
+
+		nextEventID = mutableState.GetNextEventID()
+		branchToken, err = mutableState.GetCurrentBranchToken()
 		if err != nil {
 			return 0, nil, err
 		}

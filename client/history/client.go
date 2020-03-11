@@ -25,6 +25,8 @@ import (
 	"sync"
 	"time"
 
+	"go.uber.org/yarpc"
+
 	h "github.com/uber/cadence/.gen/go/history"
 	"github.com/uber/cadence/.gen/go/history/historyserviceclient"
 	"github.com/uber/cadence/.gen/go/replicator"
@@ -32,7 +34,6 @@ import (
 	"github.com/uber/cadence/common"
 	"github.com/uber/cadence/common/log"
 	"github.com/uber/cadence/common/log/tag"
-	"go.uber.org/yarpc"
 )
 
 var _ Client = (*clientImpl)(nil)
@@ -185,6 +186,9 @@ func (c *clientImpl) RemoveTask(
 	var client historyserviceclient.Interface
 	if request.ShardID != nil {
 		client, err = c.getClientForShardID(int(request.GetShardID()))
+		if err != nil {
+			return err
+		}
 	}
 	op := func(ctx context.Context, client historyserviceclient.Interface) error {
 		var err error
@@ -207,6 +211,9 @@ func (c *clientImpl) CloseShard(
 	var client historyserviceclient.Interface
 	if request.ShardID != nil {
 		client, err = c.getClientForShardID(int(request.GetShardID()))
+		if err != nil {
+			return err
+		}
 	}
 	op := func(ctx context.Context, client historyserviceclient.Interface) error {
 		var err error
@@ -738,7 +745,7 @@ func (c *clientImpl) QueryWorkflow(
 	request *h.QueryWorkflowRequest,
 	opts ...yarpc.CallOption,
 ) (*h.QueryWorkflowResponse, error) {
-	client, err := c.getClientForWorkflowID(request.Execution.GetWorkflowId())
+	client, err := c.getClientForWorkflowID(request.GetRequest().GetExecution().GetWorkflowId())
 	if err != nil {
 		return nil, err
 	}
@@ -772,7 +779,9 @@ func (c *clientImpl) GetReplicationMessages(
 		}
 
 		if _, ok := requestsByClient[client]; !ok {
-			requestsByClient[client] = &replicator.GetReplicationMessagesRequest{}
+			requestsByClient[client] = &replicator.GetReplicationMessagesRequest{
+				ClusterName: request.ClusterName,
+			}
 		}
 
 		req := requestsByClient[client]
@@ -810,6 +819,25 @@ func (c *clientImpl) GetReplicationMessages(
 	return response, nil
 }
 
+func (c *clientImpl) GetDLQReplicationMessages(
+	ctx context.Context,
+	request *replicator.GetDLQReplicationMessagesRequest,
+	opts ...yarpc.CallOption,
+) (*replicator.GetDLQReplicationMessagesResponse, error) {
+	// All workflow IDs are in the same shard per request
+	workflowID := request.GetTaskInfos()[0].GetWorkflowID()
+	client, err := c.getClientForWorkflowID(workflowID)
+	if err != nil {
+		return nil, err
+	}
+
+	return client.GetDLQReplicationMessages(
+		ctx,
+		request,
+		opts...,
+	)
+}
+
 func (c *clientImpl) ReapplyEvents(
 	ctx context.Context,
 	request *h.ReapplyEventsRequest,
@@ -824,6 +852,63 @@ func (c *clientImpl) ReapplyEvents(
 		ctx, cancel := c.createContext(ctx)
 		defer cancel()
 		return client.ReapplyEvents(ctx, request, opts...)
+	}
+	err = c.executeWithRedirect(ctx, client, op)
+	return err
+}
+
+func (c *clientImpl) ReadDLQMessages(
+	ctx context.Context,
+	request *replicator.ReadDLQMessagesRequest,
+	opts ...yarpc.CallOption,
+) (*replicator.ReadDLQMessagesResponse, error) {
+
+	client, err := c.getClientForShardID(int(request.GetShardID()))
+	if err != nil {
+		return nil, err
+	}
+	opts = common.AggregateYarpcOptions(ctx, opts...)
+	return client.ReadDLQMessages(ctx, request, opts...)
+}
+
+func (c *clientImpl) PurgeDLQMessages(
+	ctx context.Context,
+	request *replicator.PurgeDLQMessagesRequest,
+	opts ...yarpc.CallOption,
+) error {
+
+	client, err := c.getClientForShardID(int(request.GetShardID()))
+	if err != nil {
+		return err
+	}
+	opts = common.AggregateYarpcOptions(ctx, opts...)
+	return client.PurgeDLQMessages(ctx, request, opts...)
+}
+
+func (c *clientImpl) MergeDLQMessages(
+	ctx context.Context,
+	request *replicator.MergeDLQMessagesRequest,
+	opts ...yarpc.CallOption,
+) (*replicator.MergeDLQMessagesResponse, error) {
+
+	client, err := c.getClientForShardID(int(request.GetShardID()))
+	if err != nil {
+		return nil, err
+	}
+	opts = common.AggregateYarpcOptions(ctx, opts...)
+	return client.MergeDLQMessages(ctx, request, opts...)
+}
+
+func (c *clientImpl) RefreshWorkflowTasks(
+	ctx context.Context,
+	request *h.RefreshWorkflowTasksRequest,
+	opts ...yarpc.CallOption,
+) error {
+	client, err := c.getClientForWorkflowID(request.GetRequest().GetExecution().GetWorkflowId())
+	op := func(ctx context.Context, client historyserviceclient.Interface) error {
+		ctx, cancel := c.createContext(ctx)
+		defer cancel()
+		return client.RefreshWorkflowTasks(ctx, request, opts...)
 	}
 	err = c.executeWithRedirect(ctx, client, op)
 	return err

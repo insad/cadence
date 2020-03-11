@@ -26,34 +26,27 @@ import (
 	"runtime"
 	"testing"
 
+	"github.com/golang/mock/gomock"
 	"github.com/pborman/uuid"
-	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
-	"github.com/uber-go/tally"
 
 	"github.com/uber/cadence/.gen/go/shared"
 	"github.com/uber/cadence/common/cache"
-	"github.com/uber/cadence/common/clock"
 	"github.com/uber/cadence/common/cluster"
-	"github.com/uber/cadence/common/log"
-	"github.com/uber/cadence/common/log/loggerimpl"
-	"github.com/uber/cadence/common/metrics"
-	"github.com/uber/cadence/common/mocks"
 	"github.com/uber/cadence/common/persistence"
-	"github.com/uber/cadence/common/service"
 )
 
 type (
 	nDCWorkflowSuite struct {
 		suite.Suite
+		*require.Assertions
 
-		mockService         service.Service
-		mockShard           *shardContextImpl
-		mockClusterMetadata *mocks.ClusterMetadata
-		mockDomainCache     *cache.DomainCacheMock
-		mockContext         *mockWorkflowExecutionContext
-		mockMutableState    *mockMutableState
-		logger              log.Logger
+		controller          *gomock.Controller
+		mockDomainCache     *cache.MockDomainCache
+		mockContext         *MockworkflowExecutionContext
+		mockMutableState    *MockmutableState
+		mockClusterMetadata *cluster.MockMetadata
 
 		domainID   string
 		workflowID string
@@ -67,57 +60,34 @@ func TestNDCWorkflowSuite(t *testing.T) {
 }
 
 func (s *nDCWorkflowSuite) SetupTest() {
-	s.logger = loggerimpl.NewDevelopmentForTest(s.Suite)
-	s.mockClusterMetadata = &mocks.ClusterMetadata{}
-	metricsClient := metrics.NewClient(tally.NoopScope, metrics.History)
-	s.mockService = service.NewTestService(s.mockClusterMetadata, nil, metricsClient, nil, nil, nil, nil)
-	s.mockDomainCache = &cache.DomainCacheMock{}
+	s.Assertions = require.New(s.T())
 
-	s.mockShard = &shardContextImpl{
-		service:                   s.mockService,
-		shardInfo:                 &persistence.ShardInfo{ShardID: 10, RangeID: 1, TransferAckLevel: 0},
-		transferSequenceNumber:    1,
-		maxTransferSequenceNumber: 100000,
-		closeCh:                   make(chan int, 100),
-		config:                    NewDynamicConfigForTest(),
-		logger:                    s.logger,
-		domainCache:               s.mockDomainCache,
-		metricsClient:             metrics.NewClient(tally.NoopScope, metrics.History),
-		timeSource:                clock.NewRealTimeSource(),
-	}
-	s.mockClusterMetadata.On("GetCurrentClusterName").Return(cluster.TestCurrentClusterName)
+	s.controller = gomock.NewController(s.T())
+	s.mockDomainCache = cache.NewMockDomainCache(s.controller)
+	s.mockContext = NewMockworkflowExecutionContext(s.controller)
+	s.mockMutableState = NewMockmutableState(s.controller)
+	s.mockClusterMetadata = cluster.NewMockMetadata(s.controller)
+	s.mockClusterMetadata.EXPECT().GetCurrentClusterName().Return(cluster.TestCurrentClusterName).AnyTimes()
 
 	s.domainID = uuid.New()
 	s.workflowID = "some random workflow ID"
 	s.runID = uuid.New()
-	s.mockContext = &mockWorkflowExecutionContext{}
-	s.mockMutableState = &mockMutableState{}
 }
 
 func (s *nDCWorkflowSuite) TearDownTest() {
-	s.mockDomainCache.AssertExpectations(s.T())
-	s.mockContext.AssertExpectations(s.T())
-	s.mockMutableState.AssertExpectations(s.T())
+	s.controller.Finish()
 }
 
 func (s *nDCWorkflowSuite) TestGetMethods() {
-	branchToken := []byte("some random branch token")
-	lastEventID := int64(2)
 	lastEventTaskID := int64(144)
 	lastEventVersion := int64(12)
-	versionHistoryItem := persistence.NewVersionHistoryItem(lastEventID, lastEventVersion)
-	versionHistory := persistence.NewVersionHistory(
-		branchToken,
-		[]*persistence.VersionHistoryItem{versionHistoryItem},
-	)
-	versionHistories := persistence.NewVersionHistories(versionHistory)
-	s.mockMutableState.On("GetVersionHistories").Return(versionHistories)
-	s.mockMutableState.On("GetExecutionInfo").Return(&persistence.WorkflowExecutionInfo{
+	s.mockMutableState.EXPECT().GetLastWriteVersion().Return(lastEventVersion, nil).AnyTimes()
+	s.mockMutableState.EXPECT().GetExecutionInfo().Return(&persistence.WorkflowExecutionInfo{
 		DomainID:        s.domainID,
 		WorkflowID:      s.workflowID,
 		RunID:           s.runID,
 		LastEventTaskID: lastEventTaskID,
-	})
+	}).AnyTimes()
 
 	nDCWorkflow := newNDCWorkflow(
 		context.Background(),
@@ -208,10 +178,8 @@ func (s *nDCWorkflowSuite) TestSuppressWorkflowBy_Error() {
 		noopReleaseFn,
 	)
 
-	incomingMockContext := &mockWorkflowExecutionContext{}
-	defer func() { incomingMockContext.AssertExpectations(s.T()) }()
-	incomingMockMutableState := &mockMutableState{}
-	defer func() { incomingMockMutableState.AssertExpectations(s.T()) }()
+	incomingMockContext := NewMockworkflowExecutionContext(s.controller)
+	incomingMockMutableState := NewMockmutableState(s.controller)
 	incomingNDCWorkflow := newNDCWorkflow(
 		context.Background(),
 		s.mockDomainCache,
@@ -222,65 +190,43 @@ func (s *nDCWorkflowSuite) TestSuppressWorkflowBy_Error() {
 	)
 
 	// cannot suppress by older workflow
-	branchToken := []byte("some random branch token")
-	lastEventID := int64(2)
 	lastEventTaskID := int64(144)
 	lastEventVersion := int64(12)
-	versionHistories := persistence.NewVersionHistories(persistence.NewVersionHistory(
-		branchToken,
-		[]*persistence.VersionHistoryItem{
-			persistence.NewVersionHistoryItem(lastEventID, lastEventVersion),
-		},
-	))
-	s.mockMutableState.On("GetVersionHistories").Return(versionHistories)
-	s.mockMutableState.On("GetExecutionInfo").Return(&persistence.WorkflowExecutionInfo{
+	s.mockMutableState.EXPECT().GetLastWriteVersion().Return(lastEventVersion, nil).AnyTimes()
+	s.mockMutableState.EXPECT().GetExecutionInfo().Return(&persistence.WorkflowExecutionInfo{
 		DomainID:        s.domainID,
 		WorkflowID:      s.workflowID,
 		RunID:           s.runID,
 		LastEventTaskID: lastEventTaskID,
-	})
+	}).AnyTimes()
 
 	incomingRunID := uuid.New()
-	incomingBranchToken := []byte("other random branch token")
-	incomingLastEventID := int64(2)
 	incomingLastEventTaskID := int64(144)
 	incomingLastEventVersion := lastEventVersion - 1
-	incomingVersionHistories := persistence.NewVersionHistories(persistence.NewVersionHistory(
-		incomingBranchToken,
-		[]*persistence.VersionHistoryItem{
-			persistence.NewVersionHistoryItem(incomingLastEventID, incomingLastEventVersion),
-		},
-	))
-	incomingMockMutableState.On("GetVersionHistories").Return(incomingVersionHistories)
-	incomingMockMutableState.On("GetExecutionInfo").Return(&persistence.WorkflowExecutionInfo{
+	incomingMockMutableState.EXPECT().GetLastWriteVersion().Return(incomingLastEventVersion, nil).AnyTimes()
+	incomingMockMutableState.EXPECT().GetExecutionInfo().Return(&persistence.WorkflowExecutionInfo{
 		DomainID:        s.domainID,
 		WorkflowID:      s.workflowID,
 		RunID:           incomingRunID,
 		LastEventTaskID: incomingLastEventTaskID,
-	})
+	}).AnyTimes()
 
 	_, err := nDCWorkflow.suppressBy(incomingNDCWorkflow)
 	s.Error(err)
 }
 
 func (s *nDCWorkflowSuite) TestSuppressWorkflowBy_Terminate() {
-	branchToken := []byte("some random branch token")
 	lastEventID := int64(2)
 	lastEventTaskID := int64(144)
 	lastEventVersion := int64(12)
-	versionHistories := persistence.NewVersionHistories(persistence.NewVersionHistory(
-		branchToken,
-		[]*persistence.VersionHistoryItem{
-			persistence.NewVersionHistoryItem(lastEventID, lastEventVersion),
-		},
-	))
-	s.mockMutableState.On("GetVersionHistories").Return(versionHistories)
-	s.mockMutableState.On("GetExecutionInfo").Return(&persistence.WorkflowExecutionInfo{
+	s.mockMutableState.EXPECT().GetNextEventID().Return(lastEventID + 1).AnyTimes()
+	s.mockMutableState.EXPECT().GetLastWriteVersion().Return(lastEventVersion, nil).AnyTimes()
+	s.mockMutableState.EXPECT().GetExecutionInfo().Return(&persistence.WorkflowExecutionInfo{
 		DomainID:        s.domainID,
 		WorkflowID:      s.workflowID,
 		RunID:           s.runID,
 		LastEventTaskID: lastEventTaskID,
-	})
+	}).AnyTimes()
 	nDCWorkflow := newNDCWorkflow(
 		context.Background(),
 		s.mockDomainCache,
@@ -291,20 +237,10 @@ func (s *nDCWorkflowSuite) TestSuppressWorkflowBy_Terminate() {
 	)
 
 	incomingRunID := uuid.New()
-	incomingBranchToken := []byte("other random branch token")
-	incomingLastEventID := int64(2)
 	incomingLastEventTaskID := int64(144)
 	incomingLastEventVersion := lastEventVersion + 1
-	incomingVersionHistories := persistence.NewVersionHistories(persistence.NewVersionHistory(
-		incomingBranchToken,
-		[]*persistence.VersionHistoryItem{
-			persistence.NewVersionHistoryItem(incomingLastEventID, incomingLastEventVersion),
-		},
-	))
-	incomingMockContext := &mockWorkflowExecutionContext{}
-	defer func() { incomingMockContext.AssertExpectations(s.T()) }()
-	incomingMockMutableState := &mockMutableState{}
-	defer func() { incomingMockMutableState.AssertExpectations(s.T()) }()
+	incomingMockContext := NewMockworkflowExecutionContext(s.controller)
+	incomingMockMutableState := NewMockmutableState(s.controller)
 	incomingNDCWorkflow := newNDCWorkflow(
 		context.Background(),
 		s.mockDomainCache,
@@ -313,25 +249,25 @@ func (s *nDCWorkflowSuite) TestSuppressWorkflowBy_Terminate() {
 		incomingMockMutableState,
 		noopReleaseFn,
 	)
-	incomingMockMutableState.On("GetVersionHistories").Return(incomingVersionHistories)
-	incomingMockMutableState.On("GetExecutionInfo").Return(&persistence.WorkflowExecutionInfo{
+	incomingMockMutableState.EXPECT().GetLastWriteVersion().Return(incomingLastEventVersion, nil).AnyTimes()
+	incomingMockMutableState.EXPECT().GetExecutionInfo().Return(&persistence.WorkflowExecutionInfo{
 		DomainID:        s.domainID,
 		WorkflowID:      s.workflowID,
 		RunID:           incomingRunID,
 		LastEventTaskID: incomingLastEventTaskID,
-	})
+	}).AnyTimes()
 
-	s.mockClusterMetadata.On("ClusterNameForFailoverVersion", lastEventVersion).Return(cluster.TestCurrentClusterName)
-	s.mockClusterMetadata.On("GetCurrentClusterName").Return(cluster.TestCurrentClusterName)
+	s.mockClusterMetadata.EXPECT().ClusterNameForFailoverVersion(lastEventVersion).Return(cluster.TestCurrentClusterName).AnyTimes()
+	s.mockClusterMetadata.EXPECT().GetCurrentClusterName().Return(cluster.TestCurrentClusterName).AnyTimes()
 
-	s.mockMutableState.On("UpdateCurrentVersion", lastEventVersion, true).Return(nil)
+	s.mockMutableState.EXPECT().UpdateCurrentVersion(lastEventVersion, true).Return(nil).AnyTimes()
 	inFlightDecision := &decisionInfo{
 		Version:    1234,
 		ScheduleID: 5678,
 		StartedID:  9012,
 	}
-	s.mockMutableState.On("GetInFlightDecision").Return(inFlightDecision, true).Times(1)
-	s.mockMutableState.On("AddDecisionTaskFailedEvent",
+	s.mockMutableState.EXPECT().GetInFlightDecision().Return(inFlightDecision, true).Times(1)
+	s.mockMutableState.EXPECT().AddDecisionTaskFailedEvent(
 		inFlightDecision.ScheduleID,
 		inFlightDecision.StartedID,
 		shared.DecisionTaskFailedCauseFailoverCloseDecision,
@@ -340,36 +276,31 @@ func (s *nDCWorkflowSuite) TestSuppressWorkflowBy_Terminate() {
 		"",
 		"",
 		"",
+		"",
 		int64(0),
 	).Return(&shared.HistoryEvent{}, nil).Times(1)
-	s.mockMutableState.On("FlushBufferedEvents").Return(nil).Times(1)
+	s.mockMutableState.EXPECT().FlushBufferedEvents().Return(nil).Times(1)
 
-	s.mockMutableState.On("AddWorkflowExecutionTerminatedEvent", mock.Anything, mock.Anything, mock.Anything).Return(&shared.HistoryEvent{}, nil)
+	s.mockMutableState.EXPECT().AddWorkflowExecutionTerminatedEvent(
+		lastEventID+1, workflowTerminationReason, gomock.Any(), workflowTerminationIdentity,
+	).Return(&shared.HistoryEvent{}, nil).Times(1)
 
 	// if workflow is in zombie or finished state, keep as is
-	s.mockMutableState.On("IsWorkflowExecutionRunning").Return(false).Once()
+	s.mockMutableState.EXPECT().IsWorkflowExecutionRunning().Return(false).Times(1)
 	policy, err := nDCWorkflow.suppressBy(incomingNDCWorkflow)
 	s.NoError(err)
 	s.Equal(transactionPolicyPassive, policy)
 
-	s.mockMutableState.On("IsWorkflowExecutionRunning").Return(true).Once()
+	s.mockMutableState.EXPECT().IsWorkflowExecutionRunning().Return(true).Times(1)
 	policy, err = nDCWorkflow.suppressBy(incomingNDCWorkflow)
 	s.NoError(err)
 	s.Equal(transactionPolicyActive, policy)
 }
 
 func (s *nDCWorkflowSuite) TestSuppressWorkflowBy_Zombiefy() {
-	branchToken := []byte("some random branch token")
-	lastEventID := int64(2)
 	lastEventTaskID := int64(144)
 	lastEventVersion := int64(12)
-	versionHistories := persistence.NewVersionHistories(persistence.NewVersionHistory(
-		branchToken,
-		[]*persistence.VersionHistoryItem{
-			persistence.NewVersionHistoryItem(lastEventID, lastEventVersion),
-		},
-	))
-	s.mockMutableState.On("GetVersionHistories").Return(versionHistories)
+	s.mockMutableState.EXPECT().GetLastWriteVersion().Return(lastEventVersion, nil).AnyTimes()
 	executionInfo := &persistence.WorkflowExecutionInfo{
 		DomainID:        s.domainID,
 		WorkflowID:      s.workflowID,
@@ -378,7 +309,7 @@ func (s *nDCWorkflowSuite) TestSuppressWorkflowBy_Zombiefy() {
 		State:           persistence.WorkflowStateRunning,
 		CloseStatus:     persistence.WorkflowCloseStatusNone,
 	}
-	s.mockMutableState.On("GetExecutionInfo").Return(executionInfo)
+	s.mockMutableState.EXPECT().GetExecutionInfo().Return(executionInfo).AnyTimes()
 	nDCWorkflow := newNDCWorkflow(
 		context.Background(),
 		s.mockDomainCache,
@@ -389,20 +320,10 @@ func (s *nDCWorkflowSuite) TestSuppressWorkflowBy_Zombiefy() {
 	)
 
 	incomingRunID := uuid.New()
-	incomingBranchToken := []byte("other random branch token")
-	incomingLastEventID := int64(2)
 	incomingLastEventTaskID := int64(144)
 	incomingLastEventVersion := lastEventVersion + 1
-	incomingVersionHistories := persistence.NewVersionHistories(persistence.NewVersionHistory(
-		incomingBranchToken,
-		[]*persistence.VersionHistoryItem{
-			persistence.NewVersionHistoryItem(incomingLastEventID, incomingLastEventVersion),
-		},
-	))
-	incomingMockContext := &mockWorkflowExecutionContext{}
-	defer func() { incomingMockContext.AssertExpectations(s.T()) }()
-	incomingMockMutableState := &mockMutableState{}
-	defer func() { incomingMockMutableState.AssertExpectations(s.T()) }()
+	incomingMockContext := NewMockworkflowExecutionContext(s.controller)
+	incomingMockMutableState := NewMockmutableState(s.controller)
 	incomingNDCWorkflow := newNDCWorkflow(
 		context.Background(),
 		s.mockDomainCache,
@@ -411,24 +332,24 @@ func (s *nDCWorkflowSuite) TestSuppressWorkflowBy_Zombiefy() {
 		incomingMockMutableState,
 		noopReleaseFn,
 	)
-	incomingMockMutableState.On("GetVersionHistories").Return(incomingVersionHistories)
-	incomingMockMutableState.On("GetExecutionInfo").Return(&persistence.WorkflowExecutionInfo{
+	incomingMockMutableState.EXPECT().GetLastWriteVersion().Return(incomingLastEventVersion, nil).AnyTimes()
+	incomingMockMutableState.EXPECT().GetExecutionInfo().Return(&persistence.WorkflowExecutionInfo{
 		DomainID:        s.domainID,
 		WorkflowID:      s.workflowID,
 		RunID:           incomingRunID,
 		LastEventTaskID: incomingLastEventTaskID,
-	})
+	}).AnyTimes()
 
-	s.mockClusterMetadata.On("ClusterNameForFailoverVersion", lastEventVersion).Return(cluster.TestAlternativeClusterName)
-	s.mockClusterMetadata.On("GetCurrentClusterName").Return(cluster.TestCurrentClusterName)
+	s.mockClusterMetadata.EXPECT().ClusterNameForFailoverVersion(lastEventVersion).Return(cluster.TestAlternativeClusterName).AnyTimes()
+	s.mockClusterMetadata.EXPECT().GetCurrentClusterName().Return(cluster.TestCurrentClusterName).AnyTimes()
 
 	// if workflow is in zombie or finished state, keep as is
-	s.mockMutableState.On("IsWorkflowExecutionRunning").Return(false).Once()
+	s.mockMutableState.EXPECT().IsWorkflowExecutionRunning().Return(false).Times(1)
 	policy, err := nDCWorkflow.suppressBy(incomingNDCWorkflow)
 	s.NoError(err)
 	s.Equal(transactionPolicyPassive, policy)
 
-	s.mockMutableState.On("IsWorkflowExecutionRunning").Return(true).Once()
+	s.mockMutableState.EXPECT().IsWorkflowExecutionRunning().Return(true).Times(1)
 	policy, err = nDCWorkflow.suppressBy(incomingNDCWorkflow)
 	s.NoError(err)
 	s.Equal(transactionPolicyPassive, policy)

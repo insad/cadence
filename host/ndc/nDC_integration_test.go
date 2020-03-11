@@ -26,8 +26,11 @@ import (
 	"fmt"
 	"io/ioutil"
 	"os"
+	"sync/atomic"
 	"testing"
 	"time"
+
+	"go.uber.org/yarpc"
 
 	"github.com/golang/mock/gomock"
 	"github.com/pborman/uuid"
@@ -37,13 +40,12 @@ import (
 	"gopkg.in/yaml.v2"
 
 	"github.com/uber/cadence/.gen/go/admin"
-	"github.com/uber/cadence/.gen/go/cadence/workflowservicetest"
-	"github.com/uber/cadence/.gen/go/replicator"
-	"github.com/uber/cadence/client/frontend"
-
+	"github.com/uber/cadence/.gen/go/admin/adminservicetest"
 	"github.com/uber/cadence/.gen/go/history"
+	"github.com/uber/cadence/.gen/go/replicator"
 	"github.com/uber/cadence/.gen/go/shared"
 	workflow "github.com/uber/cadence/.gen/go/shared"
+	adminClient "github.com/uber/cadence/client/admin"
 	"github.com/uber/cadence/common"
 	"github.com/uber/cadence/common/cache"
 	"github.com/uber/cadence/common/log"
@@ -66,11 +68,13 @@ type (
 		serializer persistence.PayloadSerializer
 		logger     log.Logger
 
-		domainName         string
-		domainID           string
-		version            int64
-		versionIncrement   int64
-		mockFrontendClient map[string]frontend.Client
+		domainName                  string
+		domainID                    string
+		version                     int64
+		versionIncrement            int64
+		mockAdminClient             map[string]adminClient.Client
+		standByReplicationTasksChan chan *replicator.ReplicationTask
+		standByTaskID               int64
 	}
 )
 
@@ -111,19 +115,21 @@ func (s *nDCIntegrationTestSuite) SetupSuite() {
 	clusterConfigs[0].WorkerConfig = &host.WorkerConfig{}
 	clusterConfigs[1].WorkerConfig = &host.WorkerConfig{}
 
-	s.mockFrontendClient = make(map[string]frontend.Client)
+	s.standByReplicationTasksChan = make(chan *replicator.ReplicationTask, 100)
+
+	s.standByTaskID = 0
+	s.mockAdminClient = make(map[string]adminClient.Client)
 	controller := gomock.NewController(s.T())
-	mockStandbyClient := workflowservicetest.NewMockClient(controller)
-	mockStandbyClient.EXPECT().GetReplicationMessages(gomock.Any(), gomock.Any()).Return(&replicator.GetReplicationMessagesResponse{
-		MessagesByShard: make(map[int32]*replicator.ReplicationMessages),
-	}, nil).AnyTimes()
-	mockOtherClient := workflowservicetest.NewMockClient(controller)
-	mockOtherClient.EXPECT().GetReplicationMessages(gomock.Any(), gomock.Any()).Return(&replicator.GetReplicationMessagesResponse{
-		MessagesByShard: make(map[int32]*replicator.ReplicationMessages),
-	}, nil).AnyTimes()
-	s.mockFrontendClient["standby"] = mockStandbyClient
-	s.mockFrontendClient["other"] = mockOtherClient
-	clusterConfigs[0].MockFrontendClient = s.mockFrontendClient
+	mockStandbyClient := adminservicetest.NewMockClient(controller)
+	mockStandbyClient.EXPECT().GetReplicationMessages(gomock.Any(), gomock.Any()).DoAndReturn(s.GetReplicationMessagesMock).AnyTimes()
+	mockOtherClient := adminservicetest.NewMockClient(controller)
+	mockOtherClient.EXPECT().GetReplicationMessages(gomock.Any(), gomock.Any()).Return(
+		&replicator.GetReplicationMessagesResponse{
+			MessagesByShard: make(map[int32]*replicator.ReplicationMessages),
+		}, nil).AnyTimes()
+	s.mockAdminClient["standby"] = mockStandbyClient
+	s.mockAdminClient["other"] = mockOtherClient
+	clusterConfigs[0].MockAdminClient = s.mockAdminClient
 
 	cluster, err := host.NewCluster(clusterConfigs[0], s.logger.WithTags(tag.ClusterName(clusterName[0])))
 	s.Require().NoError(err)
@@ -134,6 +140,39 @@ func (s *nDCIntegrationTestSuite) SetupSuite() {
 	s.version = clusterConfigs[1].ClusterMetadata.ClusterInformation[clusterConfigs[1].ClusterMetadata.CurrentClusterName].InitialFailoverVersion
 	s.versionIncrement = clusterConfigs[0].ClusterMetadata.FailoverVersionIncrement
 	s.generator = test.InitializeHistoryEventGenerator(s.domainName, s.version)
+}
+
+func (s *nDCIntegrationTestSuite) GetReplicationMessagesMock(
+	ctx context.Context,
+	request *replicator.GetReplicationMessagesRequest,
+	opts ...yarpc.CallOption,
+) (*replicator.GetReplicationMessagesResponse, error) {
+	select {
+	case task := <-s.standByReplicationTasksChan:
+		taskID := atomic.AddInt64(&s.standByTaskID, 1)
+		task.SourceTaskId = common.Int64Ptr(taskID)
+		tasks := []*replicator.ReplicationTask{task}
+		for len(s.standByReplicationTasksChan) > 0 {
+			task = <-s.standByReplicationTasksChan
+			taskID := atomic.AddInt64(&s.standByTaskID, 1)
+			task.SourceTaskId = common.Int64Ptr(taskID)
+			tasks = append(tasks, task)
+		}
+
+		replicationMessage := &replicator.ReplicationMessages{
+			ReplicationTasks:       tasks,
+			LastRetrievedMessageId: tasks[len(tasks)-1].SourceTaskId,
+			HasMore:                common.BoolPtr(true),
+		}
+
+		return &replicator.GetReplicationMessagesResponse{
+			MessagesByShard: map[int32]*replicator.ReplicationMessages{0: replicationMessage},
+		}, nil
+	default:
+		return &replicator.GetReplicationMessagesResponse{
+			MessagesByShard: make(map[int32]*replicator.ReplicationMessages),
+		}, nil
+	}
 }
 
 func (s *nDCIntegrationTestSuite) SetupTest() {
@@ -186,39 +225,56 @@ func (s *nDCIntegrationTestSuite) TestSingleBranch() {
 			historyClient,
 		)
 
-		// get replicated history events from passive side
-		passiveClient := s.active.GetFrontendClient()
-		replicatedHistory, err := passiveClient.GetWorkflowExecutionHistory(
-			s.createContext(),
-			&shared.GetWorkflowExecutionHistoryRequest{
-				Domain: common.StringPtr(s.domainName),
-				Execution: &shared.WorkflowExecution{
-					WorkflowId: common.StringPtr(workflowID),
-					RunId:      common.StringPtr(runID),
-				},
-				MaximumPageSize:        common.Int32Ptr(1000),
-				NextPageToken:          nil,
-				WaitForNewEvent:        common.BoolPtr(false),
-				HistoryEventFilterType: shared.HistoryEventFilterTypeAllEvent.Ptr(),
-			},
-		)
-		s.Nil(err, "Failed to get history event from passive side")
+		err := s.verifyEventHistory(workflowID, runID, historyBatch)
+		s.Require().NoError(err)
+	}
+}
 
-		// compare origin events with replicated events
-		batchIndex := 0
-		batch := historyBatch[batchIndex].Events
-		eventIndex := 0
-		for _, event := range replicatedHistory.GetHistory().GetEvents() {
-			if eventIndex >= len(batch) {
-				batchIndex++
-				batch = historyBatch[batchIndex].Events
-				eventIndex = 0
-			}
-			originEvent := batch[eventIndex]
-			eventIndex++
-			s.Equal(originEvent.GetEventType().String(), event.GetEventType().String(), "The replicated event and the origin event are not the same")
+func (s *nDCIntegrationTestSuite) verifyEventHistory(
+	workflowID string,
+	runID string,
+	historyBatch []*workflow.History,
+) error {
+	// get replicated history events from passive side
+	passiveClient := s.active.GetFrontendClient()
+	replicatedHistory, err := passiveClient.GetWorkflowExecutionHistory(
+		s.createContext(),
+		&shared.GetWorkflowExecutionHistoryRequest{
+			Domain: common.StringPtr(s.domainName),
+			Execution: &shared.WorkflowExecution{
+				WorkflowId: common.StringPtr(workflowID),
+				RunId:      common.StringPtr(runID),
+			},
+			MaximumPageSize:        common.Int32Ptr(1000),
+			NextPageToken:          nil,
+			WaitForNewEvent:        common.BoolPtr(false),
+			HistoryEventFilterType: shared.HistoryEventFilterTypeAllEvent.Ptr(),
+		},
+	)
+
+	if err != nil {
+		return fmt.Errorf("failed to get history event from passive side: %v", err)
+	}
+
+	// compare origin events with replicated events
+	batchIndex := 0
+	batch := historyBatch[batchIndex].Events
+	eventIndex := 0
+	for _, event := range replicatedHistory.GetHistory().GetEvents() {
+		if eventIndex >= len(batch) {
+			batchIndex++
+			batch = historyBatch[batchIndex].Events
+			eventIndex = 0
+		}
+		originEvent := batch[eventIndex]
+		eventIndex++
+		if originEvent.GetEventType() != event.GetEventType() {
+			return fmt.Errorf("the replicated event (%v) and the origin event (%v) are not the same",
+				originEvent.GetEventType().String(), event.GetEventType().String())
 		}
 	}
+
+	return nil
 }
 
 func (s *nDCIntegrationTestSuite) TestMultipleBranches() {
@@ -612,6 +668,275 @@ func (s *nDCIntegrationTestSuite) TestHandcraftedMultipleBranches() {
 	)
 }
 
+func (s *nDCIntegrationTestSuite) TestHandcraftedMultipleBranchesWithZombieContinueAsNew() {
+
+	s.setupRemoteFrontendClients()
+	workflowID := "ndc-handcrafted-multiple-branches-with-continue-as-new-test" + uuid.New()
+	runID := uuid.New()
+
+	workflowType := "event-generator-workflow-type"
+	tasklist := "event-generator-taskList"
+	identity := "worker-identity"
+
+	// active has initial version 0
+	historyClient := s.active.GetHistoryClient()
+
+	eventsBatch1 := []*shared.History{
+		{Events: []*shared.HistoryEvent{
+			{
+				EventId:   common.Int64Ptr(1),
+				Version:   common.Int64Ptr(21),
+				EventType: shared.EventTypeWorkflowExecutionStarted.Ptr(),
+				WorkflowExecutionStartedEventAttributes: &shared.WorkflowExecutionStartedEventAttributes{
+					WorkflowType:                        &shared.WorkflowType{Name: common.StringPtr(workflowType)},
+					TaskList:                            &shared.TaskList{Name: common.StringPtr(tasklist)},
+					Input:                               nil,
+					ExecutionStartToCloseTimeoutSeconds: common.Int32Ptr(1000),
+					TaskStartToCloseTimeoutSeconds:      common.Int32Ptr(1000),
+					FirstDecisionTaskBackoffSeconds:     common.Int32Ptr(100),
+				},
+			},
+			{
+				EventId:   common.Int64Ptr(2),
+				Version:   common.Int64Ptr(21),
+				EventType: shared.EventTypeDecisionTaskScheduled.Ptr(),
+				DecisionTaskScheduledEventAttributes: &shared.DecisionTaskScheduledEventAttributes{
+					TaskList:                   &shared.TaskList{Name: common.StringPtr(tasklist)},
+					StartToCloseTimeoutSeconds: common.Int32Ptr(1000),
+					Attempt:                    common.Int64Ptr(0),
+				},
+			},
+		}},
+		{Events: []*shared.HistoryEvent{
+			{
+				EventId:   common.Int64Ptr(3),
+				Version:   common.Int64Ptr(21),
+				EventType: shared.EventTypeDecisionTaskStarted.Ptr(),
+				DecisionTaskStartedEventAttributes: &shared.DecisionTaskStartedEventAttributes{
+					ScheduledEventId: common.Int64Ptr(2),
+					Identity:         common.StringPtr(identity),
+					RequestId:        common.StringPtr(uuid.New()),
+				},
+			},
+		}},
+		{Events: []*shared.HistoryEvent{
+			{
+				EventId:   common.Int64Ptr(4),
+				Version:   common.Int64Ptr(21),
+				EventType: shared.EventTypeDecisionTaskCompleted.Ptr(),
+				DecisionTaskCompletedEventAttributes: &shared.DecisionTaskCompletedEventAttributes{
+					ScheduledEventId: common.Int64Ptr(2),
+					StartedEventId:   common.Int64Ptr(3),
+					Identity:         common.StringPtr(identity),
+				},
+			},
+			{
+				EventId:   common.Int64Ptr(5),
+				Version:   common.Int64Ptr(21),
+				EventType: shared.EventTypeMarkerRecorded.Ptr(),
+				MarkerRecordedEventAttributes: &shared.MarkerRecordedEventAttributes{
+					MarkerName:                   common.StringPtr("some marker name"),
+					Details:                      []byte("some marker details"),
+					DecisionTaskCompletedEventId: common.Int64Ptr(4),
+				},
+			},
+			{
+				EventId:   common.Int64Ptr(6),
+				Version:   common.Int64Ptr(21),
+				EventType: shared.EventTypeActivityTaskScheduled.Ptr(),
+				ActivityTaskScheduledEventAttributes: &shared.ActivityTaskScheduledEventAttributes{
+					DecisionTaskCompletedEventId:  common.Int64Ptr(4),
+					ActivityId:                    common.StringPtr("0"),
+					ActivityType:                  &shared.ActivityType{Name: common.StringPtr("activity-type")},
+					TaskList:                      &shared.TaskList{Name: common.StringPtr(tasklist)},
+					Input:                         nil,
+					ScheduleToCloseTimeoutSeconds: common.Int32Ptr(20),
+					ScheduleToStartTimeoutSeconds: common.Int32Ptr(20),
+					StartToCloseTimeoutSeconds:    common.Int32Ptr(20),
+					HeartbeatTimeoutSeconds:       common.Int32Ptr(20),
+				},
+			},
+		}},
+		{Events: []*shared.HistoryEvent{
+			{
+				EventId:   common.Int64Ptr(7),
+				Version:   common.Int64Ptr(21),
+				EventType: shared.EventTypeActivityTaskStarted.Ptr(),
+				ActivityTaskStartedEventAttributes: &shared.ActivityTaskStartedEventAttributes{
+					ScheduledEventId: common.Int64Ptr(6),
+					Identity:         common.StringPtr(identity),
+					RequestId:        common.StringPtr(uuid.New()),
+					Attempt:          common.Int32Ptr(0),
+				},
+			},
+		}},
+		{Events: []*shared.HistoryEvent{
+			{
+				EventId:   common.Int64Ptr(8),
+				Version:   common.Int64Ptr(21),
+				EventType: shared.EventTypeWorkflowExecutionSignaled.Ptr(),
+				WorkflowExecutionSignaledEventAttributes: &shared.WorkflowExecutionSignaledEventAttributes{
+					SignalName: common.StringPtr("some signal name 1"),
+					Input:      []byte("some signal details 1"),
+					Identity:   common.StringPtr(identity),
+				},
+			},
+			{
+				EventId:   common.Int64Ptr(9),
+				Version:   common.Int64Ptr(21),
+				EventType: shared.EventTypeDecisionTaskScheduled.Ptr(),
+				DecisionTaskScheduledEventAttributes: &shared.DecisionTaskScheduledEventAttributes{
+					TaskList:                   &shared.TaskList{Name: common.StringPtr(tasklist)},
+					StartToCloseTimeoutSeconds: common.Int32Ptr(1000),
+					Attempt:                    common.Int64Ptr(0),
+				},
+			},
+		}},
+		{Events: []*shared.HistoryEvent{
+			{
+				EventId:   common.Int64Ptr(10),
+				Version:   common.Int64Ptr(21),
+				EventType: shared.EventTypeDecisionTaskStarted.Ptr(),
+				DecisionTaskStartedEventAttributes: &shared.DecisionTaskStartedEventAttributes{
+					ScheduledEventId: common.Int64Ptr(9),
+					Identity:         common.StringPtr(identity),
+					RequestId:        common.StringPtr(uuid.New()),
+				},
+			},
+		}},
+		{Events: []*shared.HistoryEvent{
+			{
+				EventId:   common.Int64Ptr(11),
+				Version:   common.Int64Ptr(21),
+				EventType: shared.EventTypeDecisionTaskCompleted.Ptr(),
+				DecisionTaskCompletedEventAttributes: &shared.DecisionTaskCompletedEventAttributes{
+					ScheduledEventId: common.Int64Ptr(9),
+					StartedEventId:   common.Int64Ptr(10),
+					Identity:         common.StringPtr(identity),
+				},
+			},
+			{
+				EventId:   common.Int64Ptr(12),
+				Version:   common.Int64Ptr(21),
+				EventType: shared.EventTypeWorkflowExecutionSignaled.Ptr(),
+				WorkflowExecutionSignaledEventAttributes: &shared.WorkflowExecutionSignaledEventAttributes{
+					SignalName: common.StringPtr("some signal name 2"),
+					Input:      []byte("some signal details 2"),
+					Identity:   common.StringPtr(identity),
+				},
+			},
+			{
+				EventId:   common.Int64Ptr(13),
+				Version:   common.Int64Ptr(21),
+				EventType: shared.EventTypeDecisionTaskScheduled.Ptr(),
+				DecisionTaskScheduledEventAttributes: &shared.DecisionTaskScheduledEventAttributes{
+					TaskList:                   &shared.TaskList{Name: common.StringPtr(tasklist)},
+					StartToCloseTimeoutSeconds: common.Int32Ptr(1000),
+					Attempt:                    common.Int64Ptr(0),
+				},
+			},
+			{
+				EventId:   common.Int64Ptr(14),
+				Version:   common.Int64Ptr(21),
+				EventType: shared.EventTypeDecisionTaskStarted.Ptr(),
+				DecisionTaskStartedEventAttributes: &shared.DecisionTaskStartedEventAttributes{
+					ScheduledEventId: common.Int64Ptr(13),
+					Identity:         common.StringPtr(identity),
+					RequestId:        common.StringPtr(uuid.New()),
+				},
+			},
+		}},
+	}
+
+	eventsBatch2 := []*shared.History{
+		{Events: []*shared.HistoryEvent{
+			{
+				EventId:   common.Int64Ptr(15),
+				Version:   common.Int64Ptr(32),
+				EventType: shared.EventTypeDecisionTaskCompleted.Ptr(),
+				DecisionTaskCompletedEventAttributes: &shared.DecisionTaskCompletedEventAttributes{
+					ScheduledEventId: common.Int64Ptr(8),
+					StartedEventId:   common.Int64Ptr(9),
+					Identity:         common.StringPtr(identity),
+				},
+			},
+		}},
+		// need to keep the workflow open for testing
+	}
+
+	eventsBatch3 := []*shared.History{
+		{Events: []*shared.HistoryEvent{
+			{
+				EventId:   common.Int64Ptr(15),
+				Version:   common.Int64Ptr(21),
+				EventType: shared.EventTypeDecisionTaskCompleted.Ptr(),
+				DecisionTaskCompletedEventAttributes: &shared.DecisionTaskCompletedEventAttributes{
+					ScheduledEventId: common.Int64Ptr(8),
+					StartedEventId:   common.Int64Ptr(9),
+					Identity:         common.StringPtr(identity),
+				},
+			},
+			{
+				EventId:   common.Int64Ptr(16),
+				Version:   common.Int64Ptr(21),
+				EventType: shared.EventTypeWorkflowExecutionContinuedAsNew.Ptr(),
+				WorkflowExecutionContinuedAsNewEventAttributes: &shared.WorkflowExecutionContinuedAsNewEventAttributes{
+					NewExecutionRunId:                   common.StringPtr(uuid.New()),
+					WorkflowType:                        &shared.WorkflowType{Name: common.StringPtr(workflowType)},
+					TaskList:                            &shared.TaskList{Name: common.StringPtr(tasklist)},
+					Input:                               nil,
+					ExecutionStartToCloseTimeoutSeconds: common.Int32Ptr(1000),
+					TaskStartToCloseTimeoutSeconds:      common.Int32Ptr(1000),
+					DecisionTaskCompletedEventId:        common.Int64Ptr(19),
+					Initiator:                           shared.ContinueAsNewInitiatorDecider.Ptr(),
+				},
+			},
+		}},
+	}
+
+	versionHistory1 := s.eventBatchesToVersionHistory(nil, eventsBatch1)
+
+	versionHistory2, err := versionHistory1.DuplicateUntilLCAItem(
+		persistence.NewVersionHistoryItem(14, 21),
+	)
+	s.NoError(err)
+	versionHistory2 = s.eventBatchesToVersionHistory(versionHistory2, eventsBatch2)
+
+	versionHistory3, err := versionHistory1.DuplicateUntilLCAItem(
+		persistence.NewVersionHistoryItem(14, 21),
+	)
+	s.NoError(err)
+	versionHistory3 = s.eventBatchesToVersionHistory(versionHistory3, eventsBatch3)
+
+	s.applyEvents(
+		workflowID,
+		runID,
+		workflowType,
+		tasklist,
+		versionHistory1,
+		eventsBatch1,
+		historyClient,
+	)
+	s.applyEvents(
+		workflowID,
+		runID,
+		workflowType,
+		tasklist,
+		versionHistory2,
+		eventsBatch2,
+		historyClient,
+	)
+	s.applyEvents(
+		workflowID,
+		runID,
+		workflowType,
+		tasklist,
+		versionHistory3,
+		eventsBatch3,
+		historyClient,
+	)
+}
+
 func (s *nDCIntegrationTestSuite) TestEventsReapply_ZombieWorkflow() {
 
 	workflowID := "ndc-single-branch-test" + uuid.New()
@@ -653,7 +978,7 @@ func (s *nDCIntegrationTestSuite) TestEventsReapply_ZombieWorkflow() {
 	s.generator = test.InitializeHistoryEventGenerator(s.domainName, version)
 
 	// verify two batches of zombie workflow are call reapply API
-	s.mockFrontendClient["standby"].(*workflowservicetest.MockClient).EXPECT().ReapplyEvents(gomock.Any(), gomock.Any()).Return(nil).Times(2)
+	s.mockAdminClient["standby"].(*adminservicetest.MockClient).EXPECT().ReapplyEvents(gomock.Any(), gomock.Any()).Return(nil).Times(2)
 	for i := 0; i < 2 && s.generator.HasNextVertex(); i++ {
 		events := s.generator.GetNextVertices()
 		historyEvents := &shared.History{}
@@ -751,7 +1076,7 @@ func (s *nDCIntegrationTestSuite) TestEventsReapply_UpdateNonCurrentBranch() {
 		historyClient,
 	)
 
-	s.mockFrontendClient["standby"].(*workflowservicetest.MockClient).EXPECT().ReapplyEvents(gomock.Any(), gomock.Any()).Return(nil).Times(1)
+	s.mockAdminClient["standby"].(*adminservicetest.MockClient).EXPECT().ReapplyEvents(gomock.Any(), gomock.Any()).Return(nil).Times(1)
 	// Handcraft a stale signal event
 	baseBranchLastEventBatch := baseBranch[len(baseBranch)-1].GetEvents()
 	baseBranchLastEvent := baseBranchLastEventBatch[len(baseBranchLastEventBatch)-1]
@@ -785,7 +1110,7 @@ func (s *nDCIntegrationTestSuite) TestEventsReapply_UpdateNonCurrentBranch() {
 	)
 }
 
-func (s *nDCIntegrationTestSuite) TestGetWorkflowExecutionRawHistoryV2() {
+func (s *nDCIntegrationTestSuite) TestAdminGetWorkflowExecutionRawHistoryV2() {
 
 	workflowID := "ndc-re-send-test" + uuid.New()
 	runID := uuid.New()
@@ -1357,6 +1682,26 @@ func (s *nDCIntegrationTestSuite) toThriftDataBlob(
 	}
 }
 
+func (s *nDCIntegrationTestSuite) generateEventBlobs(
+	workflowID string,
+	runID string,
+	workflowType string,
+	tasklist string,
+	batch *shared.History,
+) (*persistence.DataBlob, *persistence.DataBlob) {
+	// TODO temporary code to generate next run first event
+	//  we should generate these as part of modeled based testing
+	lastEvent := batch.Events[len(batch.Events)-1]
+	newRunEventBlob := s.generateNewRunHistory(
+		lastEvent, s.domainName, workflowID, runID, lastEvent.GetVersion(), workflowType, tasklist,
+	)
+	// must serialize events batch after attempt on continue as new as generateNewRunHistory will
+	// modify the NewExecutionRunId attr
+	eventBlob, err := s.serializer.SerializeBatchEvents(batch.Events, common.EncodingTypeThriftRW)
+	s.NoError(err)
+	return eventBlob, newRunEventBlob
+}
+
 func (s *nDCIntegrationTestSuite) applyEvents(
 	workflowID string,
 	runID string,
@@ -1366,22 +1711,9 @@ func (s *nDCIntegrationTestSuite) applyEvents(
 	eventBatches []*shared.History,
 	historyClient host.HistoryClient,
 ) {
-
 	for _, batch := range eventBatches {
-
-		// TODO temporary code to generate next run first event
-		//  we should generate these as part of modeled based testing
-		lastEvent := batch.Events[len(batch.Events)-1]
-		newRunEventBlob := s.generateNewRunHistory(
-			lastEvent, s.domainName, workflowID, runID, lastEvent.GetVersion(), workflowType, tasklist,
-		)
-
-		// must serialize events batch after attempt on continue as new as generateNewRunHistory will
-		// modify the NewExecutionRunId attr
-		eventBlob, err := s.serializer.SerializeBatchEvents(batch.Events, common.EncodingTypeThriftRW)
-		s.NoError(err)
-
-		err = historyClient.ReplicateEventsV2(s.createContext(), &history.ReplicateEventsV2Request{
+		eventBlob, newRunEventBlob := s.generateEventBlobs(workflowID, runID, workflowType, tasklist, batch)
+		req := &history.ReplicateEventsV2Request{
 			DomainUUID: common.StringPtr(s.domainID),
 			WorkflowExecution: &shared.WorkflowExecution{
 				WorkflowId: common.StringPtr(workflowID),
@@ -1390,8 +1722,44 @@ func (s *nDCIntegrationTestSuite) applyEvents(
 			VersionHistoryItems: s.toThriftVersionHistoryItems(versionHistory),
 			Events:              s.toThriftDataBlob(eventBlob),
 			NewRunEvents:        s.toThriftDataBlob(newRunEventBlob),
-		})
+		}
+
+		err := historyClient.ReplicateEventsV2(s.createContext(), req)
 		s.Nil(err, "Failed to replicate history event")
+		err = historyClient.ReplicateEventsV2(s.createContext(), req)
+		s.Nil(err, "Failed to dedup replicate history event")
+	}
+}
+
+func (s *nDCIntegrationTestSuite) applyEventsThroughFetcher(
+	workflowID string,
+	runID string,
+	workflowType string,
+	tasklist string,
+	versionHistory *persistence.VersionHistory,
+	eventBatches []*shared.History,
+) {
+	for _, batch := range eventBatches {
+		eventBlob, newRunEventBlob := s.generateEventBlobs(workflowID, runID, workflowType, tasklist, batch)
+
+		taskType := replicator.ReplicationTaskTypeHistoryV2
+		replicationTask := &replicator.ReplicationTask{
+			TaskType:     &taskType,
+			SourceTaskId: common.Int64Ptr(1),
+			HistoryTaskV2Attributes: &replicator.HistoryTaskV2Attributes{
+				TaskId:              common.Int64Ptr(1),
+				DomainId:            common.StringPtr(s.domainID),
+				WorkflowId:          common.StringPtr(workflowID),
+				RunId:               common.StringPtr(runID),
+				VersionHistoryItems: s.toThriftVersionHistoryItems(versionHistory),
+				Events:              s.toThriftDataBlob(eventBlob),
+				NewRunEvents:        s.toThriftDataBlob(newRunEventBlob),
+			},
+		}
+
+		s.standByReplicationTasksChan <- replicationTask
+		// this is to test whether dedup works
+		s.standByReplicationTasksChan <- replicationTask
 	}
 }
 
@@ -1435,6 +1803,6 @@ func (s *nDCIntegrationTestSuite) createContext() context.Context {
 }
 
 func (s *nDCIntegrationTestSuite) setupRemoteFrontendClients() {
-	s.mockFrontendClient["standby"].(*workflowservicetest.MockClient).EXPECT().ReapplyEvents(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
-	s.mockFrontendClient["other"].(*workflowservicetest.MockClient).EXPECT().ReapplyEvents(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+	s.mockAdminClient["standby"].(*adminservicetest.MockClient).EXPECT().ReapplyEvents(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+	s.mockAdminClient["other"].(*adminservicetest.MockClient).EXPECT().ReapplyEvents(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 }

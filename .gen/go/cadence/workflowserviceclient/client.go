@@ -1,6 +1,6 @@
 // The MIT License (MIT)
 // 
-// Copyright (c) 2019 Uber Technologies, Inc.
+// Copyright (c) 2020 Uber Technologies, Inc.
 // 
 // Permission is hereby granted, free of charge, to any person obtaining a copy
 // of this software and associated documentation files (the "Software"), to deal
@@ -28,7 +28,6 @@ package workflowserviceclient
 import (
 	context "context"
 	cadence "github.com/uber/cadence/.gen/go/cadence"
-	replicator "github.com/uber/cadence/.gen/go/replicator"
 	shared "github.com/uber/cadence/.gen/go/shared"
 	wire "go.uber.org/thriftrw/wire"
 	yarpc "go.uber.org/yarpc"
@@ -69,17 +68,10 @@ type Interface interface {
 		opts ...yarpc.CallOption,
 	) (*shared.DescribeWorkflowExecutionResponse, error)
 
-	GetDomainReplicationMessages(
+	GetClusterInfo(
 		ctx context.Context,
-		Request *replicator.GetDomainReplicationMessagesRequest,
 		opts ...yarpc.CallOption,
-	) (*replicator.GetDomainReplicationMessagesResponse, error)
-
-	GetReplicationMessages(
-		ctx context.Context,
-		Request *replicator.GetReplicationMessagesRequest,
-		opts ...yarpc.CallOption,
-	) (*replicator.GetReplicationMessagesResponse, error)
+	) (*shared.ClusterInfo, error)
 
 	GetSearchAttributes(
 		ctx context.Context,
@@ -91,6 +83,12 @@ type Interface interface {
 		GetRequest *shared.GetWorkflowExecutionHistoryRequest,
 		opts ...yarpc.CallOption,
 	) (*shared.GetWorkflowExecutionHistoryResponse, error)
+
+	GetWorkflowExecutionRawHistory(
+		ctx context.Context,
+		GetRequest *shared.GetWorkflowExecutionRawHistoryRequest,
+		opts ...yarpc.CallOption,
+	) (*shared.GetWorkflowExecutionRawHistoryResponse, error)
 
 	ListArchivedWorkflowExecutions(
 		ctx context.Context,
@@ -116,6 +114,12 @@ type Interface interface {
 		opts ...yarpc.CallOption,
 	) (*shared.ListOpenWorkflowExecutionsResponse, error)
 
+	ListTaskListPartitions(
+		ctx context.Context,
+		Request *shared.ListTaskListPartitionsRequest,
+		opts ...yarpc.CallOption,
+	) (*shared.ListTaskListPartitionsResponse, error)
+
 	ListWorkflowExecutions(
 		ctx context.Context,
 		ListRequest *shared.ListWorkflowExecutionsRequest,
@@ -134,17 +138,17 @@ type Interface interface {
 		opts ...yarpc.CallOption,
 	) (*shared.PollForDecisionTaskResponse, error)
 
+	PollForWorkflowExecutionRawHistory(
+		ctx context.Context,
+		GetRequest *shared.PollForWorkflowExecutionRawHistoryRequest,
+		opts ...yarpc.CallOption,
+	) (*shared.PollForWorkflowExecutionRawHistoryResponse, error)
+
 	QueryWorkflow(
 		ctx context.Context,
 		QueryRequest *shared.QueryWorkflowRequest,
 		opts ...yarpc.CallOption,
 	) (*shared.QueryWorkflowResponse, error)
-
-	ReapplyEvents(
-		ctx context.Context,
-		ReapplyEventsRequest *shared.ReapplyEventsRequest,
-		opts ...yarpc.CallOption,
-	) error
 
 	RecordActivityTaskHeartbeat(
 		ctx context.Context,
@@ -412,13 +416,12 @@ func (c client) DescribeWorkflowExecution(
 	return
 }
 
-func (c client) GetDomainReplicationMessages(
+func (c client) GetClusterInfo(
 	ctx context.Context,
-	_Request *replicator.GetDomainReplicationMessagesRequest,
 	opts ...yarpc.CallOption,
-) (success *replicator.GetDomainReplicationMessagesResponse, err error) {
+) (success *shared.ClusterInfo, err error) {
 
-	args := cadence.WorkflowService_GetDomainReplicationMessages_Helper.Args(_Request)
+	args := cadence.WorkflowService_GetClusterInfo_Helper.Args()
 
 	var body wire.Value
 	body, err = c.c.Call(ctx, args, opts...)
@@ -426,35 +429,12 @@ func (c client) GetDomainReplicationMessages(
 		return
 	}
 
-	var result cadence.WorkflowService_GetDomainReplicationMessages_Result
+	var result cadence.WorkflowService_GetClusterInfo_Result
 	if err = result.FromWire(body); err != nil {
 		return
 	}
 
-	success, err = cadence.WorkflowService_GetDomainReplicationMessages_Helper.UnwrapResponse(&result)
-	return
-}
-
-func (c client) GetReplicationMessages(
-	ctx context.Context,
-	_Request *replicator.GetReplicationMessagesRequest,
-	opts ...yarpc.CallOption,
-) (success *replicator.GetReplicationMessagesResponse, err error) {
-
-	args := cadence.WorkflowService_GetReplicationMessages_Helper.Args(_Request)
-
-	var body wire.Value
-	body, err = c.c.Call(ctx, args, opts...)
-	if err != nil {
-		return
-	}
-
-	var result cadence.WorkflowService_GetReplicationMessages_Result
-	if err = result.FromWire(body); err != nil {
-		return
-	}
-
-	success, err = cadence.WorkflowService_GetReplicationMessages_Helper.UnwrapResponse(&result)
+	success, err = cadence.WorkflowService_GetClusterInfo_Helper.UnwrapResponse(&result)
 	return
 }
 
@@ -500,6 +480,29 @@ func (c client) GetWorkflowExecutionHistory(
 	}
 
 	success, err = cadence.WorkflowService_GetWorkflowExecutionHistory_Helper.UnwrapResponse(&result)
+	return
+}
+
+func (c client) GetWorkflowExecutionRawHistory(
+	ctx context.Context,
+	_GetRequest *shared.GetWorkflowExecutionRawHistoryRequest,
+	opts ...yarpc.CallOption,
+) (success *shared.GetWorkflowExecutionRawHistoryResponse, err error) {
+
+	args := cadence.WorkflowService_GetWorkflowExecutionRawHistory_Helper.Args(_GetRequest)
+
+	var body wire.Value
+	body, err = c.c.Call(ctx, args, opts...)
+	if err != nil {
+		return
+	}
+
+	var result cadence.WorkflowService_GetWorkflowExecutionRawHistory_Result
+	if err = result.FromWire(body); err != nil {
+		return
+	}
+
+	success, err = cadence.WorkflowService_GetWorkflowExecutionRawHistory_Helper.UnwrapResponse(&result)
 	return
 }
 
@@ -595,6 +598,29 @@ func (c client) ListOpenWorkflowExecutions(
 	return
 }
 
+func (c client) ListTaskListPartitions(
+	ctx context.Context,
+	_Request *shared.ListTaskListPartitionsRequest,
+	opts ...yarpc.CallOption,
+) (success *shared.ListTaskListPartitionsResponse, err error) {
+
+	args := cadence.WorkflowService_ListTaskListPartitions_Helper.Args(_Request)
+
+	var body wire.Value
+	body, err = c.c.Call(ctx, args, opts...)
+	if err != nil {
+		return
+	}
+
+	var result cadence.WorkflowService_ListTaskListPartitions_Result
+	if err = result.FromWire(body); err != nil {
+		return
+	}
+
+	success, err = cadence.WorkflowService_ListTaskListPartitions_Helper.UnwrapResponse(&result)
+	return
+}
+
 func (c client) ListWorkflowExecutions(
 	ctx context.Context,
 	_ListRequest *shared.ListWorkflowExecutionsRequest,
@@ -664,6 +690,29 @@ func (c client) PollForDecisionTask(
 	return
 }
 
+func (c client) PollForWorkflowExecutionRawHistory(
+	ctx context.Context,
+	_GetRequest *shared.PollForWorkflowExecutionRawHistoryRequest,
+	opts ...yarpc.CallOption,
+) (success *shared.PollForWorkflowExecutionRawHistoryResponse, err error) {
+
+	args := cadence.WorkflowService_PollForWorkflowExecutionRawHistory_Helper.Args(_GetRequest)
+
+	var body wire.Value
+	body, err = c.c.Call(ctx, args, opts...)
+	if err != nil {
+		return
+	}
+
+	var result cadence.WorkflowService_PollForWorkflowExecutionRawHistory_Result
+	if err = result.FromWire(body); err != nil {
+		return
+	}
+
+	success, err = cadence.WorkflowService_PollForWorkflowExecutionRawHistory_Helper.UnwrapResponse(&result)
+	return
+}
+
 func (c client) QueryWorkflow(
 	ctx context.Context,
 	_QueryRequest *shared.QueryWorkflowRequest,
@@ -684,29 +733,6 @@ func (c client) QueryWorkflow(
 	}
 
 	success, err = cadence.WorkflowService_QueryWorkflow_Helper.UnwrapResponse(&result)
-	return
-}
-
-func (c client) ReapplyEvents(
-	ctx context.Context,
-	_ReapplyEventsRequest *shared.ReapplyEventsRequest,
-	opts ...yarpc.CallOption,
-) (err error) {
-
-	args := cadence.WorkflowService_ReapplyEvents_Helper.Args(_ReapplyEventsRequest)
-
-	var body wire.Value
-	body, err = c.c.Call(ctx, args, opts...)
-	if err != nil {
-		return
-	}
-
-	var result cadence.WorkflowService_ReapplyEvents_Result
-	if err = result.FromWire(body); err != nil {
-		return
-	}
-
-	err = cadence.WorkflowService_ReapplyEvents_Helper.UnwrapResponse(&result)
 	return
 }
 

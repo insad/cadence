@@ -22,15 +22,14 @@ package archiver
 
 import (
 	"bytes"
-	"context"
 	"encoding/gob"
 	"time"
 
 	"github.com/dgryski/go-farm"
+	"go.uber.org/cadence/activity"
+
 	"github.com/uber/cadence/common/log"
 	"github.com/uber/cadence/common/log/tag"
-	"go.uber.org/cadence"
-	"go.uber.org/cadence/activity"
 )
 
 // MaxArchivalIterationTimeout returns the max allowed timeout for a single iteration of archival workflow
@@ -40,7 +39,7 @@ func MaxArchivalIterationTimeout() time.Duration {
 
 func hash(i interface{}) uint64 {
 	var b bytes.Buffer
-	gob.NewEncoder(&b).Encode(i)
+	gob.NewEncoder(&b).Encode(i) //nolint:errcheck
 	return farm.Fingerprint64(b.Bytes())
 }
 
@@ -99,22 +98,4 @@ func convertSearchAttributesToString(searchAttr map[string][]byte) map[string]st
 		searchAttrStr[k] = string(v)
 	}
 	return searchAttrStr
-}
-
-func contextExpired(ctx context.Context) bool {
-	select {
-	case <-ctx.Done():
-		return true
-	default:
-		return false
-	}
-}
-
-func errorDetails(err error) string {
-	var details string
-	if _, ok := err.(*cadence.CustomError); !ok {
-		return details
-	}
-	err.(*cadence.CustomError).Details(&details)
-	return details
 }

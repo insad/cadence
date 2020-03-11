@@ -27,6 +27,7 @@ import (
 
 	"github.com/olivere/elastic"
 	"github.com/uber-go/tally"
+
 	"github.com/uber/cadence/common"
 	"github.com/uber/cadence/common/collection"
 	es "github.com/uber/cadence/common/elasticsearch"
@@ -111,15 +112,14 @@ func NewESProcessorAndStart(config *Config, client es.Client, processorName stri
 }
 
 func (p *esProcessorImpl) Stop() {
-	p.processor.Stop()
+	p.processor.Stop() //nolint:errcheck
 	p.mapToKafkaMsg = nil
 }
 
 // Add an ES request, and an map item for kafka message
 func (p *esProcessorImpl) Add(request elastic.BulkableRequest, key string, kafkaMsg messaging.Message) {
 	actionWhenFoundDuplicates := func(key interface{}, value interface{}) error {
-		kafkaMsg.Ack()
-		return nil
+		return kafkaMsg.Ack()
 	}
 	sw := p.metricsClient.StartTimer(metrics.ESProcessorScope, metrics.ESProcessorProcessMsgLatency)
 	mapVal := newKafkaMessageWithMetrics(kafkaMsg, &sw)
@@ -271,11 +271,12 @@ func isResponseSuccess(status int) bool {
 // responses with these status will be kept in queue and retried until success
 // 408 - Request Timeout
 // 429 - Too Many Requests
+// 500 - Node not connected
 // 503 - Service Unavailable
 // 507 - Insufficient Storage
 func isResponseRetriable(status int) bool {
 	switch status {
-	case 408, 429, 503, 507:
+	case 408, 429, 500, 503, 507:
 		return true
 	}
 	return false
@@ -297,14 +298,14 @@ func newKafkaMessageWithMetrics(kafkaMsg messaging.Message, stopwatch *tally.Sto
 }
 
 func (km *kafkaMessageWithMetrics) Ack() {
-	km.message.Ack()
+	km.message.Ack() //nolint:errcheck
 	if km.swFromAddToAck != nil {
 		km.swFromAddToAck.Stop()
 	}
 }
 
 func (km *kafkaMessageWithMetrics) Nack() {
-	km.message.Nack()
+	km.message.Nack() //nolint:errcheck
 	if km.swFromAddToAck != nil {
 		km.swFromAddToAck.Stop()
 	}

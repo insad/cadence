@@ -27,7 +27,10 @@ import (
 
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/suite"
-	"github.com/uber/cadence/.gen/go/shared"
+	"go.uber.org/cadence/testsuite"
+	"go.uber.org/cadence/worker"
+	"go.uber.org/zap"
+
 	"github.com/uber/cadence/common"
 	carchiver "github.com/uber/cadence/common/archiver"
 	"github.com/uber/cadence/common/archiver/provider"
@@ -36,9 +39,6 @@ import (
 	"github.com/uber/cadence/common/metrics"
 	mmocks "github.com/uber/cadence/common/metrics/mocks"
 	"github.com/uber/cadence/common/mocks"
-	"go.uber.org/cadence/testsuite"
-	"go.uber.org/cadence/worker"
-	"go.uber.org/zap"
 )
 
 const (
@@ -56,7 +56,6 @@ var (
 	testBranchToken = []byte{1, 2, 3}
 
 	errPersistenceNonRetryable = errors.New("persistence non-retryable error")
-	errPersistenceRetryable    = &shared.InternalServiceError{}
 )
 
 type activitiesSuite struct {
@@ -376,10 +375,4 @@ func (s *activitiesSuite) TestArchiveVisibilityActivity_Success() {
 	}
 	_, err := env.ExecuteActivity(archiveVisibilityActivity, request)
 	s.NoError(err)
-}
-
-func getCanceledContext() context.Context {
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	return ctx
 }

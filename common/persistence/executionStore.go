@@ -76,6 +76,7 @@ func (m *executionManagerImpl) GetWorkflowExecution(
 			SignalInfos:        response.State.SignalInfos,
 			SignalRequestedIDs: response.State.SignalRequestedIDs,
 			ReplicationState:   response.State.ReplicationState,
+			Checksum:           response.State.Checksum,
 		},
 	}
 
@@ -133,7 +134,7 @@ func (m *executionManagerImpl) DeserializeExecutionInfo(
 		TaskList:                           info.TaskList,
 		WorkflowTypeName:                   info.WorkflowTypeName,
 		WorkflowTimeout:                    info.WorkflowTimeout,
-		DecisionTimeoutValue:               info.DecisionTimeoutValue,
+		DecisionStartToCloseTimeout:        info.DecisionStartToCloseTimeout,
 		ExecutionContext:                   info.ExecutionContext,
 		State:                              info.State,
 		CloseStatus:                        info.CloseStatus,
@@ -451,7 +452,7 @@ func (m *executionManagerImpl) SerializeExecutionInfo(
 		TaskList:                           info.TaskList,
 		WorkflowTypeName:                   info.WorkflowTypeName,
 		WorkflowTimeout:                    info.WorkflowTimeout,
-		DecisionTimeoutValue:               info.DecisionTimeoutValue,
+		DecisionStartToCloseTimeout:        info.DecisionStartToCloseTimeout,
 		ExecutionContext:                   info.ExecutionContext,
 		State:                              info.State,
 		CloseStatus:                        info.CloseStatus,
@@ -672,6 +673,7 @@ func (m *executionManagerImpl) SerializeWorkflowMutation(
 		TimerTasks:       input.TimerTasks,
 
 		Condition: input.Condition,
+		Checksum:  input.Checksum,
 	}, nil
 }
 
@@ -729,6 +731,7 @@ func (m *executionManagerImpl) SerializeWorkflowSnapshot(
 		TimerTasks:       input.TimerTasks,
 
 		Condition: input.Condition,
+		Checksum:  input.Checksum,
 	}, nil
 }
 
@@ -811,6 +814,36 @@ func (m *executionManagerImpl) CompleteReplicationTask(
 	request *CompleteReplicationTaskRequest,
 ) error {
 	return m.persistence.CompleteReplicationTask(request)
+}
+
+func (m *executionManagerImpl) RangeCompleteReplicationTask(
+	request *RangeCompleteReplicationTaskRequest,
+) error {
+	return m.persistence.RangeCompleteReplicationTask(request)
+}
+
+func (m *executionManagerImpl) PutReplicationTaskToDLQ(
+	request *PutReplicationTaskToDLQRequest,
+) error {
+	return m.persistence.PutReplicationTaskToDLQ(request)
+}
+
+func (m *executionManagerImpl) GetReplicationTasksFromDLQ(
+	request *GetReplicationTasksFromDLQRequest,
+) (*GetReplicationTasksFromDLQResponse, error) {
+	return m.persistence.GetReplicationTasksFromDLQ(request)
+}
+
+func (m *executionManagerImpl) DeleteReplicationTaskFromDLQ(
+	request *DeleteReplicationTaskFromDLQRequest,
+) error {
+	return m.persistence.DeleteReplicationTaskFromDLQ(request)
+}
+
+func (m *executionManagerImpl) RangeDeleteReplicationTaskFromDLQ(
+	request *RangeDeleteReplicationTaskFromDLQRequest,
+) error {
+	return m.persistence.RangeDeleteReplicationTaskFromDLQ(request)
 }
 
 // Timer related methods.

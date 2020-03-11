@@ -38,7 +38,7 @@ import (
 	"github.com/uber/cadence/common/metrics"
 	"github.com/uber/cadence/common/mocks"
 	"github.com/uber/cadence/common/persistence"
-	persistenceFactory "github.com/uber/cadence/common/persistence/persistence-factory"
+	"github.com/uber/cadence/common/persistence/client"
 	"github.com/uber/cadence/common/service/config"
 	"github.com/uber/cadence/common/service/dynamicconfig"
 )
@@ -62,10 +62,6 @@ var (
 			Usage: "Workflow execution retention in days",
 		},
 		cli.StringFlag{
-			Name:  FlagEmitMetricWithAlias,
-			Usage: "Flag to emit metric",
-		},
-		cli.StringFlag{
 			Name:  FlagActiveClusterNameWithAlias,
 			Usage: "Active cluster name",
 		},
@@ -86,7 +82,7 @@ var (
 		},
 		cli.StringFlag{
 			Name:  FlagSecurityTokenWithAlias,
-			Usage: "Security token with permission",
+			Usage: "Optional token for security check",
 		},
 		cli.StringFlag{
 			Name:  FlagHistoryArchivalStatusWithAlias,
@@ -120,10 +116,6 @@ var (
 			Usage: "Workflow execution retention in days",
 		},
 		cli.StringFlag{
-			Name:  FlagEmitMetricWithAlias,
-			Usage: "Flag to emit metric",
-		},
-		cli.StringFlag{
 			Name:  FlagActiveClusterNameWithAlias,
 			Usage: "Active cluster name",
 		},
@@ -140,7 +132,7 @@ var (
 		},
 		cli.StringFlag{
 			Name:  FlagSecurityTokenWithAlias,
-			Usage: "Security token with permission ",
+			Usage: "Optional token for security check",
 		},
 		cli.StringFlag{
 			Name:  FlagHistoryArchivalStatusWithAlias,
@@ -290,14 +282,15 @@ func initializeMetadataMgr(
 ) persistence.MetadataManager {
 
 	pConfig := serviceConfig.Persistence
-	pConfig.SetMaxQPS(pConfig.DefaultStore, dependencyMaxQPS)
 	pConfig.VisibilityConfig = &config.VisibilityConfig{
 		VisibilityListMaxQPS:            dynamicconfig.GetIntPropertyFilteredByDomain(dependencyMaxQPS),
 		EnableSampling:                  dynamicconfig.GetBoolPropertyFn(false), // not used by domain operation
 		EnableReadFromClosedExecutionV2: dynamicconfig.GetBoolPropertyFn(false), // not used by domain operation
 	}
-	pFactory := persistenceFactory.New(
+	pFactory := client.NewFactory(
 		&pConfig,
+		dynamicconfig.GetIntPropertyFn(dependencyMaxQPS),
+		nil, // TODO propagate abstract datastore factory from the CLI.
 		clusterMetadata.GetCurrentClusterName(),
 		metricsClient,
 		logger,

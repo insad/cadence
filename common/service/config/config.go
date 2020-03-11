@@ -24,12 +24,15 @@ import (
 	"encoding/json"
 	"time"
 
+	"github.com/uber/cadence/common/auth"
+
 	"github.com/uber-go/tally/m3"
 	"github.com/uber-go/tally/prometheus"
+	"github.com/uber/ringpop-go/discovery"
+
 	"github.com/uber/cadence/common/elasticsearch"
 	"github.com/uber/cadence/common/messaging"
 	"github.com/uber/cadence/common/service/dynamicconfig"
-	"github.com/uber/ringpop-go/discovery"
 )
 
 const (
@@ -132,9 +135,9 @@ type (
 		// DataStores contains the configuration for all datastores
 		DataStores map[string]DataStore `yaml:"datastores"`
 		// VisibilityConfig is config for visibility sampling
-		VisibilityConfig *VisibilityConfig
+		VisibilityConfig *VisibilityConfig `yaml:"-" json:"-"`
 		// TransactionSizeLimit is the largest allowed transaction size
-		TransactionSizeLimit dynamicconfig.IntPropertyFn
+		TransactionSizeLimit dynamicconfig.IntPropertyFn `yaml:"-" json:"-"`
 	}
 
 	// DataStore is the configuration for a single datastore
@@ -143,6 +146,8 @@ type (
 		Cassandra *Cassandra `yaml:"cassandra"`
 		// SQL contains the config for a SQL based datastore
 		SQL *SQL `yaml:"sql"`
+		// Custom contains the config for custom datastore implementation
+		CustomDataStoreConfig *CustomDatastoreConfig `yaml:"customDatastore"`
 		// ElasticSearch contains the config for a ElasticSearch datastore
 		ElasticSearch *elasticsearch.Config `yaml:"elasticsearch"`
 	}
@@ -150,21 +155,21 @@ type (
 	// VisibilityConfig is config for visibility sampling
 	VisibilityConfig struct {
 		// EnableSampling for visibility
-		EnableSampling dynamicconfig.BoolPropertyFn
+		EnableSampling dynamicconfig.BoolPropertyFn `yaml:"-" json:"-"`
 		// EnableReadFromClosedExecutionV2 read closed from v2 table
-		EnableReadFromClosedExecutionV2 dynamicconfig.BoolPropertyFn
+		EnableReadFromClosedExecutionV2 dynamicconfig.BoolPropertyFn `yaml:"-" json:"-"`
 		// VisibilityOpenMaxQPS max QPS for record open workflows
-		VisibilityOpenMaxQPS dynamicconfig.IntPropertyFnWithDomainFilter
+		VisibilityOpenMaxQPS dynamicconfig.IntPropertyFnWithDomainFilter `yaml:"-" json:"-"`
 		// VisibilityClosedMaxQPS max QPS for record closed workflows
-		VisibilityClosedMaxQPS dynamicconfig.IntPropertyFnWithDomainFilter
+		VisibilityClosedMaxQPS dynamicconfig.IntPropertyFnWithDomainFilter `yaml:"-" json:"-"`
 		// VisibilityListMaxQPS max QPS for list workflow
-		VisibilityListMaxQPS dynamicconfig.IntPropertyFnWithDomainFilter
+		VisibilityListMaxQPS dynamicconfig.IntPropertyFnWithDomainFilter `yaml:"-" json:"-"`
 		// ESIndexMaxResultWindow ElasticSearch index setting max_result_window
-		ESIndexMaxResultWindow dynamicconfig.IntPropertyFn
+		ESIndexMaxResultWindow dynamicconfig.IntPropertyFn `yaml:"-" json:"-"`
 		// MaxQPS is overall max QPS
-		MaxQPS dynamicconfig.IntPropertyFn
+		MaxQPS dynamicconfig.IntPropertyFn `yaml:"-" json:"-"`
 		// ValidSearchAttributes is legal indexed keys that can be used in list APIs
-		ValidSearchAttributes dynamicconfig.MapPropertyFn
+		ValidSearchAttributes dynamicconfig.MapPropertyFn `yaml:"-" json:"-"`
 	}
 
 	// Cassandra contains configuration to connect to Cassandra cluster
@@ -179,14 +184,12 @@ type (
 		Password string `yaml:"password"`
 		// keyspace is the cassandra keyspace
 		Keyspace string `yaml:"keyspace" validate:"nonzero"`
-		// Consistency is the default cassandra consistency level
-		Consistency string `yaml:"consistency"`
 		// Datacenter is the data center filter arg for cassandra
 		Datacenter string `yaml:"datacenter"`
-		// MaxQPS is the max request rate to this datastore
-		MaxQPS int `yaml:"maxQPS"`
 		// MaxConns is the max number of connections to this datastore for a single keyspace
 		MaxConns int `yaml:"maxConns"`
+		// TLS configuration
+		TLS *auth.TLS `yaml:"tls"`
 	}
 
 	// SQL is the configuration for connecting to a SQL backed datastore
@@ -195,8 +198,8 @@ type (
 		User string `yaml:"user"`
 		// Password is the password corresponding to the user name
 		Password string `yaml:"password"`
-		// DriverName is the name of SQL driver
-		DriverName string `yaml:"driverName" validate:"nonzero"`
+		// PluginName is the name of SQL plugin
+		PluginName string `yaml:"pluginName" validate:"nonzero"`
 		// DatabaseName is the name of SQL database to connect to
 		DatabaseName string `yaml:"databaseName" validate:"nonzero"`
 		// ConnectAddr is the remote addr of the database
@@ -205,8 +208,6 @@ type (
 		ConnectProtocol string `yaml:"connectProtocol" validate:"nonzero"`
 		// ConnectAttributes is a set of key-value attributes to be sent as part of connect data_source_name url
 		ConnectAttributes map[string]string `yaml:"connectAttributes"`
-		// MaxQPS the max request rate on this datastore
-		MaxQPS int `yaml:"maxQPS"`
 		// MaxConns the max number of connections to this datastore
 		MaxConns int `yaml:"maxConns"`
 		// MaxIdleConns is the max number of idle connections to this datastore
@@ -216,6 +217,16 @@ type (
 		// NumShards is the number of storage shards to use for tables
 		// in a sharded sql database. The default value for this param is 1
 		NumShards int `yaml:"nShards"`
+		// TLS is the configuration for TLS connections
+		TLS *auth.TLS `yaml:"tls"`
+	}
+
+	// CustomDatastoreConfig is the configuration for connecting to a custom datastore that is not supported by cadence core
+	CustomDatastoreConfig struct {
+		// Name of the custom datastore
+		Name string `yaml:"name"`
+		// ConnectAttributes is a set of key-value attributes that can be used by AbstractDatastoreFactory implementation
+		ConnectAttributes map[string]string `yaml:"connectAttributes"`
 	}
 
 	// Replicator describes the configuration of replicator
@@ -261,18 +272,6 @@ type (
 	ReplicationConsumerConfig struct {
 		// Type determines how we consume replication tasks. It can be either kafka(default) or rpc.
 		Type string `yaml:"type"`
-		// FetcherConfig is the config for replication task fetcher.
-		FetcherConfig *FetcherConfig `yaml:"fetcher"`
-		// ProcessorConfig is the config for replication task processor.
-		ProcessorConfig *ReplicationTaskProcessorConfig `yaml:"processor"`
-	}
-
-	// FetcherConfig is the config for replication task fetcher.
-	FetcherConfig struct {
-		RPCParallelism          int     `yaml:"rpcParallelism"`
-		AggregationIntervalSecs int     `yaml:"aggregationIntervalSecs"`
-		ErrorRetryWaitSecs      int     `yaml:"errorRetryWaitSecs"`
-		TimerJitterCoefficient  float64 `yaml:"timerJitterCoefficient"`
 	}
 
 	// ReplicationTaskProcessorConfig is the config for replication task processor.
@@ -299,6 +298,8 @@ type (
 		// Tags is the set of key-value pairs to be reported
 		// as part of every metric
 		Tags map[string]string `yaml:"tags"`
+		// Prefix sets the prefix to all outgoing metrics
+		Prefix string `yaml:"prefix"`
 	}
 
 	// Statsd contains the config items for statsd metrics reporter
@@ -337,6 +338,8 @@ type (
 	// HistoryArchiverProvider contains the config for all history archivers
 	HistoryArchiverProvider struct {
 		Filestore *FilestoreArchiver `yaml:"filestore"`
+		Gstorage  *GstorageArchiver  `yaml:"gstorage"`
+		S3store   *S3Archiver        `yaml:"s3store"`
 	}
 
 	// VisibilityArchival contains the config for visibility archival
@@ -352,12 +355,26 @@ type (
 	// VisibilityArchiverProvider contains the config for all visibility archivers
 	VisibilityArchiverProvider struct {
 		Filestore *FilestoreArchiver `yaml:"filestore"`
+		S3store   *S3Archiver        `yaml:"s3store"`
+		Gstorage  *GstorageArchiver  `yaml:"gstorage"`
 	}
 
 	// FilestoreArchiver contain the config for filestore archiver
 	FilestoreArchiver struct {
 		FileMode string `yaml:"fileMode"`
 		DirMode  string `yaml:"dirMode"`
+	}
+
+	// GstorageArchiver contain the config for google storage archiver
+	GstorageArchiver struct {
+		CredentialsPath string `yaml:"credentialsPath"`
+	}
+
+	// S3Archiver contains the config for S3 archiver
+	S3Archiver struct {
+		Region           string  `yaml:"region"`
+		Endpoint         *string `yaml:"endpoint"`
+		S3ForcePathStyle bool    `yaml:"s3ForcePathStyle"`
 	}
 
 	// PublicClient is config for connecting to cadence frontend

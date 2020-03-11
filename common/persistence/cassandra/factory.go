@@ -21,10 +21,12 @@
 package cassandra
 
 import (
-	"github.com/uber/cadence/common"
 	"sync"
 
+	"github.com/uber/cadence/common/cassandra"
+
 	"github.com/gocql/gocql"
+
 	"github.com/uber/cadence/common/log"
 	p "github.com/uber/cadence/common/persistence"
 	"github.com/uber/cadence/common/service/config"
@@ -66,7 +68,7 @@ func (f *Factory) NewShardStore() (p.ShardStore, error) {
 }
 
 // NewHistoryV2Store returns a new history store
-func (f *Factory) NewHistoryV2Store() (p.HistoryV2Store, error) {
+func (f *Factory) NewHistoryV2Store() (p.HistoryStore, error) {
 	return newHistoryV2Persistence(f.cfg, f.logger)
 }
 
@@ -90,7 +92,7 @@ func (f *Factory) NewVisibilityStore() (p.VisibilityStore, error) {
 }
 
 // NewQueue returns a new queue backed by cassandra
-func (f *Factory) NewQueue(queueType common.QueueType) (p.Queue, error) {
+func (f *Factory) NewQueue(queueType p.QueueType) (p.Queue, error) {
 	return newQueue(f.cfg, f.logger, queueType)
 }
 
@@ -126,15 +128,11 @@ func (f *Factory) executionStoreFactory() (*executionStoreFactory, error) {
 
 // newExecutionStoreFactory is used to create an instance of ExecutionStoreFactory implementation
 func newExecutionStoreFactory(cfg config.Cassandra, logger log.Logger) (*executionStoreFactory, error) {
-	cluster := NewCassandraCluster(cfg.Hosts, cfg.Port, cfg.User, cfg.Password, cfg.Datacenter)
-	cluster.Keyspace = cfg.Keyspace
+	cluster := cassandra.NewCassandraCluster(cfg)
 	cluster.ProtoVersion = cassandraProtoVersion
 	cluster.Consistency = gocql.LocalQuorum
 	cluster.SerialConsistency = gocql.LocalSerial
 	cluster.Timeout = defaultSessionTimeout
-	if cfg.MaxConns > 0 {
-		cluster.NumConns = cfg.MaxConns
-	}
 	session, err := cluster.CreateSession()
 	if err != nil {
 		return nil, err

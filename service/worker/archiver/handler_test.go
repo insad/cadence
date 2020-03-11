@@ -29,13 +29,14 @@ import (
 
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/suite"
-	"github.com/uber/cadence/common/log"
-	"github.com/uber/cadence/common/metrics"
-	mmocks "github.com/uber/cadence/common/metrics/mocks"
 	"go.uber.org/cadence"
 	"go.uber.org/cadence/.gen/go/shared"
 	"go.uber.org/cadence/testsuite"
 	"go.uber.org/cadence/workflow"
+
+	"github.com/uber/cadence/common/log"
+	"github.com/uber/cadence/common/metrics"
+	mmocks "github.com/uber/cadence/common/metrics/mocks"
 )
 
 var (
@@ -237,7 +238,7 @@ func randomArchiveRequest() (ArchiveRequest, uint64) {
 		DomainID:   fmt.Sprintf("%v", rand.Intn(1000)),
 		WorkflowID: fmt.Sprintf("%v", rand.Intn(1000)),
 		RunID:      fmt.Sprintf("%v", rand.Intn(1000)),
-		Targets:    []archivalTarget{ArchiveTargetHistory, ArchiveTargetVisibility},
+		Targets:    []ArchivalTarget{ArchiveTargetHistory, ArchiveTargetVisibility},
 	}
 	return ar, hash(ar)
 }

@@ -46,7 +46,6 @@ type (
 	}
 
 	nDCWorkflowImpl struct {
-		shard           ShardContext
 		domainCache     cache.DomainCache
 		clusterMetadata cluster.Metadata
 
@@ -91,19 +90,13 @@ func (r *nDCWorkflowImpl) getReleaseFn() releaseWorkflowExecutionFunc {
 
 func (r *nDCWorkflowImpl) getVectorClock() (int64, int64, error) {
 
-	currentVersionHistory, err := r.mutableState.GetVersionHistories().GetCurrentVersionHistory()
-	if err != nil {
-		return 0, 0, err
-	}
-
-	lastItem, err := currentVersionHistory.GetLastItem()
+	lastWriteVersion, err := r.mutableState.GetLastWriteVersion()
 	if err != nil {
 		return 0, 0, err
 	}
 
 	lastEventTaskID := r.mutableState.GetExecutionInfo().LastEventTaskID
-
-	return lastItem.GetVersion(), lastEventTaskID, nil
+	return lastWriteVersion, lastEventTaskID, nil
 }
 
 func (r *nDCWorkflowImpl) happensAfter(
@@ -242,15 +235,13 @@ func (r *nDCWorkflowImpl) failDecision(
 		"",
 		"",
 		"",
+		"",
 		0,
 	); err != nil {
 		return err
 	}
 
-	if err := r.mutableState.FlushBufferedEvents(); err != nil {
-		return err
-	}
-	return nil
+	return r.mutableState.FlushBufferedEvents()
 }
 
 func (r *nDCWorkflowImpl) terminateWorkflow(
@@ -258,6 +249,7 @@ func (r *nDCWorkflowImpl) terminateWorkflow(
 	incomingLastWriteVersion int64,
 ) error {
 
+	eventBatchFirstEventID := r.getMutableState().GetNextEventID()
 	if err := r.failDecision(lastWriteVersion); err != nil {
 		return err
 	}
@@ -268,6 +260,7 @@ func (r *nDCWorkflowImpl) terminateWorkflow(
 	}
 
 	_, err := r.mutableState.AddWorkflowExecutionTerminatedEvent(
+		eventBatchFirstEventID,
 		workflowTerminationReason,
 		[]byte(fmt.Sprintf("terminated by version: %v", incomingLastWriteVersion)),
 		workflowTerminationIdentity,

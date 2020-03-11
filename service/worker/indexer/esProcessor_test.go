@@ -30,6 +30,8 @@ import (
 	"github.com/olivere/elastic"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/suite"
+	"go.uber.org/zap"
+
 	"github.com/uber/cadence/common/collection"
 	es "github.com/uber/cadence/common/elasticsearch"
 	esMocks "github.com/uber/cadence/common/elasticsearch/mocks"
@@ -39,7 +41,6 @@ import (
 	mmocks "github.com/uber/cadence/common/metrics/mocks"
 	"github.com/uber/cadence/common/service/dynamicconfig"
 	"github.com/uber/cadence/service/worker/indexer/mocks"
-	"go.uber.org/zap"
 )
 
 type esProcessorSuite struct {
@@ -369,7 +370,7 @@ func (s *esProcessorSuite) TestIsResponseSuccess() {
 }
 
 func (s *esProcessorSuite) TestIsResponseRetriable() {
-	status := []int{408, 429, 503, 507}
+	status := []int{408, 429, 500, 503, 507}
 	for _, code := range status {
 		s.True(isResponseRetriable(code))
 	}

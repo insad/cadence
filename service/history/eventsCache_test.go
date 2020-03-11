@@ -28,6 +28,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
 	"github.com/uber-go/tally"
+
 	"github.com/uber/cadence/.gen/go/shared"
 	"github.com/uber/cadence/common"
 	"github.com/uber/cadence/common/log"
@@ -40,9 +41,8 @@ import (
 type (
 	eventsCacheSuite struct {
 		suite.Suite
-		// override suite.Suite.Assertions with require.Assertions; this means that s.NotNil(nil) will stop the test,
-		// not merely log an error
 		*require.Assertions
+
 		logger log.Logger
 
 		mockEventsV2Mgr *mocks.HistoryV2Manager
@@ -65,6 +65,8 @@ func (s *eventsCacheSuite) TearDownSuite() {
 }
 
 func (s *eventsCacheSuite) SetupTest() {
+	s.Assertions = require.New(s.T())
+
 	s.logger = loggerimpl.NewDevelopmentForTest(s.Suite)
 	// Have to define our overridden assertions in the test setup. If we did it earlier, s.T() will return nil
 	s.Assertions = require.New(s.T())

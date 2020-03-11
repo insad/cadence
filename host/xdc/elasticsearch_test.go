@@ -38,6 +38,9 @@ import (
 	"github.com/pborman/uuid"
 	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
+	"go.uber.org/zap"
+	"gopkg.in/yaml.v2"
+
 	workflow "github.com/uber/cadence/.gen/go/shared"
 	"github.com/uber/cadence/common"
 	"github.com/uber/cadence/common/definition"
@@ -46,8 +49,6 @@ import (
 	"github.com/uber/cadence/common/log/tag"
 	"github.com/uber/cadence/environment"
 	"github.com/uber/cadence/host"
-	"go.uber.org/zap"
-	"gopkg.in/yaml.v2"
 )
 
 const (
@@ -202,7 +203,7 @@ func (s *esCrossDCTestSuite) TestSearchAttributes() {
 	query := fmt.Sprintf(`WorkflowID = "%s" and %s = "%s"`, id, s.testSearchAttributeKey, s.testSearchAttributeVal)
 	listRequest := &workflow.ListWorkflowExecutionsRequest{
 		Domain:   common.StringPtr(domainName),
-		PageSize: common.Int32Ptr(100),
+		PageSize: common.Int32Ptr(5),
 		Query:    common.StringPtr(query),
 	}
 

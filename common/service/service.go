@@ -26,7 +26,14 @@ import (
 	"sync/atomic"
 	"time"
 
+	persistenceClient "github.com/uber/cadence/common/persistence/client"
+
+	"github.com/uber/cadence/common/authorization"
+
 	"github.com/uber-go/tally"
+	"go.uber.org/cadence/.gen/go/cadence/workflowserviceclient"
+	"go.uber.org/yarpc"
+
 	"github.com/uber/cadence/client"
 	"github.com/uber/cadence/common"
 	"github.com/uber/cadence/common/archiver"
@@ -42,16 +49,7 @@ import (
 	"github.com/uber/cadence/common/persistence"
 	"github.com/uber/cadence/common/service/config"
 	"github.com/uber/cadence/common/service/dynamicconfig"
-	"go.uber.org/cadence/.gen/go/cadence/workflowserviceclient"
-	"go.uber.org/yarpc"
 )
-
-var cadenceServices = []string{
-	common.FrontendServiceName,
-	common.HistoryServiceName,
-	common.MatchingServiceName,
-	common.WorkerServiceName,
-}
 
 type (
 	// BootstrapParams holds the set of parameters
@@ -62,29 +60,31 @@ type (
 		Logger          log.Logger
 		ThrottledLogger log.Logger
 
-		MetricScope         tally.Scope
-		MembershipFactory   MembershipMonitorFactory
-		RPCFactory          common.RPCFactory
-		PProfInitializer    common.PProfInitializer
-		PersistenceConfig   config.Persistence
-		ClusterMetadata     cluster.Metadata
-		ReplicatorConfig    config.Replicator
-		MetricsClient       metrics.Client
-		MessagingClient     messaging.Client
-		ESClient            es.Client
-		ESConfig            *es.Config
-		DynamicConfig       dynamicconfig.Client
-		DispatcherProvider  client.DispatcherProvider
-		DCRedirectionPolicy config.DCRedirectionPolicy
-		PublicClient        workflowserviceclient.Interface
-		ArchivalMetadata    archiver.ArchivalMetadata
-		ArchiverProvider    provider.ArchiverProvider
+		MetricScope              tally.Scope
+		MembershipFactory        MembershipMonitorFactory
+		RPCFactory               common.RPCFactory
+		AbstractDatastoreFactory persistenceClient.AbstractDataStoreFactory
+		PProfInitializer         common.PProfInitializer
+		PersistenceConfig        config.Persistence
+		ClusterMetadata          cluster.Metadata
+		ReplicatorConfig         config.Replicator
+		MetricsClient            metrics.Client
+		MessagingClient          messaging.Client
+		ESClient                 es.Client
+		ESConfig                 *es.Config
+		DynamicConfig            dynamicconfig.Client
+		DispatcherProvider       client.DispatcherProvider
+		DCRedirectionPolicy      config.DCRedirectionPolicy
+		PublicClient             workflowserviceclient.Interface
+		ArchivalMetadata         archiver.ArchivalMetadata
+		ArchiverProvider         provider.ArchiverProvider
+		Authorizer               authorization.Authorizer
 	}
 
 	// MembershipMonitorFactory provides a bootstrapped membership monitor
 	MembershipMonitorFactory interface {
-		// Create vends a bootstrapped membership monitor
-		Create(d *yarpc.Dispatcher) (membership.Monitor, error)
+		// GetMembershipMonitor return a membership monitor
+		GetMembershipMonitor() (membership.Monitor, error)
 	}
 
 	// Service contains the objects specific to this service
@@ -101,7 +101,7 @@ type (
 		clientBean            client.Bean
 		timeSource            clock.TimeSource
 		numberOfHistoryShards int
-		// New logger we are in favor of
+
 		logger          log.Logger
 		throttledLogger log.Logger
 
@@ -145,7 +145,7 @@ func New(params *BootstrapParams) Service {
 	}
 
 	sVice.runtimeMetricsReporter = metrics.NewRuntimeMetricsReporter(params.MetricScope, time.Minute, sVice.GetLogger(), params.InstanceID)
-	sVice.dispatcher = sVice.rpcFactory.CreateDispatcher()
+	sVice.dispatcher = sVice.rpcFactory.GetDispatcher()
 	if sVice.dispatcher == nil {
 		sVice.logger.Fatal("Unable to create yarpc dispatcher")
 	}
@@ -189,15 +189,12 @@ func (h *serviceImpl) Start() {
 		h.logger.WithTags(tag.Error(err)).Fatal("Failed to start yarpc dispatcher")
 	}
 
-	h.membershipMonitor, err = h.membershipFactory.Create(h.dispatcher)
+	h.membershipMonitor, err = h.membershipFactory.GetMembershipMonitor()
 	if err != nil {
 		h.logger.WithTags(tag.Error(err)).Fatal("Membership monitor creation failed")
 	}
 
-	err = h.membershipMonitor.Start()
-	if err != nil {
-		h.logger.WithTags(tag.Error(err)).Fatal("starting membership monitor failed")
-	}
+	h.membershipMonitor.Start()
 
 	hostInfo, err := h.membershipMonitor.WhoAmI()
 	if err != nil {
@@ -231,7 +228,7 @@ func (h *serviceImpl) Stop() {
 	}
 
 	if h.dispatcher != nil {
-		h.dispatcher.Stop()
+		h.dispatcher.Stop() //nolint:errcheck
 	}
 
 	h.runtimeMetricsReporter.Stop()

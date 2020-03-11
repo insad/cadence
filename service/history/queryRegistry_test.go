@@ -23,16 +23,20 @@
 package history
 
 import (
+	"errors"
 	"testing"
+
+	"github.com/uber/cadence/common"
+
+	"github.com/uber/cadence/.gen/go/shared"
 
 	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
-	"github.com/uber/cadence/.gen/go/shared"
 )
 
 type QueryRegistrySuite struct {
-	*require.Assertions
 	suite.Suite
+	*require.Assertions
 }
 
 func TestQueryRegistrySuite(t *testing.T) {
@@ -45,85 +49,195 @@ func (s *QueryRegistrySuite) SetupTest() {
 
 func (s *QueryRegistrySuite) TestQueryRegistry() {
 	qr := newQueryRegistry()
-	var ids []string
-	for i := 0; i < 10; i++ {
-		id, _, _ := qr.bufferQuery(&shared.WorkflowQuery{})
-		ids = append(ids, id)
+	ids := make([]string, 100, 100)
+	termChans := make([]<-chan struct{}, 100, 100)
+	for i := 0; i < 100; i++ {
+		ids[i], termChans[i] = qr.bufferQuery(&shared.WorkflowQuery{})
 	}
-	s.assertHasQueries(qr, true, false, false)
-	s.assertQuerySizes(qr, 10, 0, 0)
+	s.assertBufferedState(qr, ids...)
+	s.assertHasQueries(qr, true, false, false, false)
+	s.assertQuerySizes(qr, 100, 0, 0, 0)
+	s.assertChanState(false, termChans...)
 
-	found, err := qr.getQuerySnapshot(ids[0])
-	s.NoError(err)
-	s.NotNil(found)
-	notFound, err := qr.getQuerySnapshot("not_exists")
-	s.Error(err)
-	s.Nil(notFound)
-
-	for i := 0; i < 5; i++ {
-		changed, err := qr.recordEvent(ids[i], queryEventStart, nil)
-		s.True(changed)
+	for i := 0; i < 25; i++ {
+		err := qr.setTerminationState(ids[i], &queryTerminationState{
+			queryTerminationType: queryTerminationTypeCompleted,
+			queryResult: &shared.WorkflowQueryResult{
+				ResultType: common.QueryResultTypePtr(shared.QueryResultTypeAnswered),
+				Answer:     []byte{1, 2, 3},
+			},
+		})
 		s.NoError(err)
 	}
-	s.assertHasQueries(qr, true, true, false)
-	s.assertQuerySizes(qr, 5, 5, 0)
+	s.assertCompletedState(qr, ids[0:25]...)
+	s.assertBufferedState(qr, ids[25:]...)
+	s.assertHasQueries(qr, true, true, false, false)
+	s.assertQuerySizes(qr, 75, 25, 0, 0)
+	s.assertChanState(true, termChans[0:25]...)
+	s.assertChanState(false, termChans[25:]...)
 
-	completeQuery := func(id string) {
-		querySnapshot, err := qr.getQuerySnapshot(id)
+	for i := 25; i < 50; i++ {
+		err := qr.setTerminationState(ids[i], &queryTerminationState{
+			queryTerminationType: queryTerminationTypeUnblocked,
+		})
 		s.NoError(err)
-		if querySnapshot.state == queryStateBuffered {
-			changed, err := qr.recordEvent(id, queryEventStart, nil)
-			s.True(changed)
-			s.NoError(err)
+	}
+	s.assertCompletedState(qr, ids[0:25]...)
+	s.assertUnblockedState(qr, ids[25:50]...)
+	s.assertBufferedState(qr, ids[50:]...)
+	s.assertHasQueries(qr, true, true, true, false)
+	s.assertQuerySizes(qr, 50, 25, 25, 0)
+	s.assertChanState(true, termChans[0:50]...)
+	s.assertChanState(false, termChans[50:]...)
+
+	for i := 50; i < 75; i++ {
+		err := qr.setTerminationState(ids[i], &queryTerminationState{
+			queryTerminationType: queryTerminationTypeFailed,
+			failure:              errors.New("err"),
+		})
+		s.NoError(err)
+	}
+	s.assertCompletedState(qr, ids[0:25]...)
+	s.assertUnblockedState(qr, ids[25:50]...)
+	s.assertFailedState(qr, ids[50:75]...)
+	s.assertBufferedState(qr, ids[75:]...)
+	s.assertHasQueries(qr, true, true, true, true)
+	s.assertQuerySizes(qr, 25, 25, 25, 25)
+	s.assertChanState(true, termChans[0:75]...)
+	s.assertChanState(false, termChans[75:]...)
+
+	for i := 0; i < 75; i++ {
+		switch i % 3 {
+		case 0:
+			s.Equal(errQueryNotExists, qr.setTerminationState(ids[i], &queryTerminationState{
+				queryTerminationType: queryTerminationTypeCompleted,
+				queryResult:          &shared.WorkflowQueryResult{},
+			}))
+		case 1:
+			s.Equal(errQueryNotExists, qr.setTerminationState(ids[i], &queryTerminationState{
+				queryTerminationType: queryTerminationTypeUnblocked,
+			}))
+		case 2:
+			s.Equal(errQueryNotExists, qr.setTerminationState(ids[i], &queryTerminationState{
+				queryTerminationType: queryTerminationTypeFailed,
+				failure:              errors.New("err"),
+			}))
 		}
-		changed, err := qr.recordEvent(id, queryEventPersistenceConditionSatisfied, nil)
-		s.False(changed)
-		s.NoError(err)
-		changed, err = qr.recordEvent(id, queryEventRecordResult, &shared.WorkflowQueryResult{})
-		s.True(changed)
-		s.NoError(err)
 	}
+	s.assertCompletedState(qr, ids[0:25]...)
+	s.assertUnblockedState(qr, ids[25:50]...)
+	s.assertFailedState(qr, ids[50:75]...)
+	s.assertBufferedState(qr, ids[75:]...)
+	s.assertHasQueries(qr, true, true, true, true)
+	s.assertQuerySizes(qr, 25, 25, 25, 25)
+	s.assertChanState(true, termChans[0:75]...)
+	s.assertChanState(false, termChans[75:]...)
 
-	q0, err := qr.getQuerySnapshot(ids[0])
-	s.NoError(err)
-	s.NotNil(q0)
-	s.Equal(queryStateStarted, q0.state)
-	completeQuery(q0.id)
-	q0, err = qr.getQuerySnapshot(q0.id)
-	s.NotNil(q0)
-	s.NoError(err)
-	s.Equal(queryStateCompleted, q0.state)
-	s.assertHasQueries(qr, true, true, true)
-	s.assertQuerySizes(qr, 5, 4, 1)
-
-	q9, err := qr.getQuerySnapshot(ids[9])
-	s.NoError(err)
-	s.NotNil(q9)
-	s.Equal(queryStateBuffered, q9.state)
-	completeQuery(q9.id)
-	q9, err = qr.getQuerySnapshot(q9.id)
-	s.NotNil(q9)
-	s.NoError(err)
-	s.Equal(queryStateCompleted, q9.state)
-	s.assertHasQueries(qr, true, true, true)
-	s.assertQuerySizes(qr, 4, 4, 2)
-
-	qr.removeQuery(ids[0])
-	qr.removeQuery(ids[1])
-	qr.removeQuery(ids[2])
-	qr.removeQuery(ids[5])
-	s.assertHasQueries(qr, true, true, true)
-	s.assertQuerySizes(qr, 3, 2, 1)
+	for i := 0; i < 25; i++ {
+		qr.removeQuery(ids[i])
+		s.assertHasQueries(qr, true, i < 24, true, true)
+		s.assertQuerySizes(qr, 25, 25-i-1, 25, 25)
+	}
+	for i := 25; i < 50; i++ {
+		qr.removeQuery(ids[i])
+		s.assertHasQueries(qr, true, false, i < 49, true)
+		s.assertQuerySizes(qr, 25, 0, 50-i-1, 25)
+	}
+	for i := 50; i < 75; i++ {
+		qr.removeQuery(ids[i])
+		s.assertHasQueries(qr, true, false, false, i < 74)
+		s.assertQuerySizes(qr, 25, 0, 0, 75-i-1)
+	}
+	for i := 75; i < 100; i++ {
+		qr.removeQuery(ids[i])
+		s.assertHasQueries(qr, i < 99, false, false, false)
+		s.assertQuerySizes(qr, 100-i-1, 0, 0, 0)
+	}
+	s.assertChanState(true, termChans[0:75]...)
+	s.assertChanState(false, termChans[75:]...)
 }
 
-func (s *QueryRegistrySuite) assertHasQueries(qr queryRegistry, buffered, started, completed bool) {
-	s.Equal(buffered, qr.hasBuffered())
-	s.Equal(started, qr.hasStarted())
-	s.Equal(completed, qr.hasCompleted())
+func (s *QueryRegistrySuite) assertBufferedState(qr queryRegistry, ids ...string) {
+	for _, id := range ids {
+		termCh, err := qr.getQueryTermCh(id)
+		s.NoError(err)
+		s.False(closed(termCh))
+		input, err := qr.getQueryInput(id)
+		s.NoError(err)
+		s.NotNil(input)
+		termState, err := qr.getTerminationState(id)
+		s.Equal(errQueryNotInTerminalState, err)
+		s.Nil(termState)
+	}
 }
 
-func (s *QueryRegistrySuite) assertQuerySizes(qr queryRegistry, buffered, started, completed int) {
-	s.Len(qr.getBufferedSnapshot(), buffered)
-	s.Len(qr.getStartedSnapshot(), started)
-	s.Len(qr.getCompletedSnapshot(), completed)
+func (s *QueryRegistrySuite) assertCompletedState(qr queryRegistry, ids ...string) {
+	for _, id := range ids {
+		termCh, err := qr.getQueryTermCh(id)
+		s.NoError(err)
+		s.True(closed(termCh))
+		input, err := qr.getQueryInput(id)
+		s.NoError(err)
+		s.NotNil(input)
+		termState, err := qr.getTerminationState(id)
+		s.NoError(err)
+		s.NotNil(termState)
+		s.Equal(queryTerminationTypeCompleted, termState.queryTerminationType)
+		s.NotNil(termState.queryResult)
+		s.Nil(termState.failure)
+	}
+}
+
+func (s *QueryRegistrySuite) assertUnblockedState(qr queryRegistry, ids ...string) {
+	for _, id := range ids {
+		termCh, err := qr.getQueryTermCh(id)
+		s.NoError(err)
+		s.True(closed(termCh))
+		input, err := qr.getQueryInput(id)
+		s.NoError(err)
+		s.NotNil(input)
+		termState, err := qr.getTerminationState(id)
+		s.NoError(err)
+		s.NotNil(termState)
+		s.Equal(queryTerminationTypeUnblocked, termState.queryTerminationType)
+		s.Nil(termState.queryResult)
+		s.Nil(termState.failure)
+	}
+}
+
+func (s *QueryRegistrySuite) assertFailedState(qr queryRegistry, ids ...string) {
+	for _, id := range ids {
+		termCh, err := qr.getQueryTermCh(id)
+		s.NoError(err)
+		s.True(closed(termCh))
+		input, err := qr.getQueryInput(id)
+		s.NoError(err)
+		s.NotNil(input)
+		termState, err := qr.getTerminationState(id)
+		s.NoError(err)
+		s.NotNil(termState)
+		s.Equal(queryTerminationTypeFailed, termState.queryTerminationType)
+		s.Nil(termState.queryResult)
+		s.NotNil(termState.failure)
+	}
+}
+
+func (s *QueryRegistrySuite) assertHasQueries(qr queryRegistry, buffered, completed, unblocked, failed bool) {
+	s.Equal(buffered, qr.hasBufferedQuery())
+	s.Equal(completed, qr.hasCompletedQuery())
+	s.Equal(unblocked, qr.hasUnblockedQuery())
+	s.Equal(failed, qr.hasFailedQuery())
+}
+
+func (s *QueryRegistrySuite) assertQuerySizes(qr queryRegistry, buffered, completed, unblocked, failed int) {
+	s.Len(qr.getBufferedIDs(), buffered)
+	s.Len(qr.getCompletedIDs(), completed)
+	s.Len(qr.getUnblockedIDs(), unblocked)
+	s.Len(qr.getFailedIDs(), failed)
+}
+
+func (s *QueryRegistrySuite) assertChanState(expectedClosed bool, chans ...<-chan struct{}) {
+	for _, ch := range chans {
+		s.Equal(expectedClosed, closed(ch))
+	}
 }

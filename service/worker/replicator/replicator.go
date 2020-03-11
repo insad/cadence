@@ -23,7 +23,6 @@ package replicator
 import (
 	"context"
 	"fmt"
-	"time"
 
 	h "github.com/uber/cadence/.gen/go/history"
 	"github.com/uber/cadence/client"
@@ -32,6 +31,7 @@ import (
 	"github.com/uber/cadence/common"
 	"github.com/uber/cadence/common/cache"
 	"github.com/uber/cadence/common/cluster"
+	"github.com/uber/cadence/common/domain"
 	"github.com/uber/cadence/common/log"
 	"github.com/uber/cadence/common/log/tag"
 	"github.com/uber/cadence/common/membership"
@@ -47,20 +47,21 @@ import (
 type (
 	// Replicator is the processor for replication tasks
 	Replicator struct {
-		domainCache       cache.DomainCache
-		clusterMetadata   cluster.Metadata
-		domainReplicator  DomainReplicator
-		clientBean        client.Bean
-		historyClient     history.Client
-		config            *Config
-		client            messaging.Client
-		processors        []*replicationTaskProcessor
-		domainProcessors  []*domainReplicationMessageProcessor
-		logger            log.Logger
-		metricsClient     metrics.Client
-		historySerializer persistence.PayloadSerializer
-		hostInfo          *membership.HostInfo
-		serviceResolver   membership.ServiceResolver
+		domainCache                   cache.DomainCache
+		clusterMetadata               cluster.Metadata
+		domainReplicationTaskExecutor domain.ReplicationTaskExecutor
+		clientBean                    client.Bean
+		historyClient                 history.Client
+		config                        *Config
+		client                        messaging.Client
+		processors                    []*replicationTaskProcessor
+		domainProcessors              []*domainReplicationMessageProcessor
+		logger                        log.Logger
+		metricsClient                 metrics.Client
+		historySerializer             persistence.PayloadSerializer
+		hostInfo                      *membership.HostInfo
+		serviceResolver               membership.ServiceResolver
+		domainReplicationQueue        persistence.DomainReplicationQueue
 	}
 
 	// Config contains all the replication config for worker
@@ -73,11 +74,8 @@ type (
 		ReplicatorHistoryBufferRetryCount  dynamicconfig.IntPropertyFn
 		ReplicationTaskMaxRetryCount       dynamicconfig.IntPropertyFn
 		ReplicationTaskMaxRetryDuration    dynamicconfig.DurationPropertyFn
+		ReplicationTaskContextTimeout      dynamicconfig.DurationPropertyFn
 	}
-)
-
-const (
-	replicationTimeout = 30 * time.Second
 )
 
 // NewReplicator creates a new replicator for processing replication tasks
@@ -92,22 +90,25 @@ func NewReplicator(
 	metricsClient metrics.Client,
 	hostInfo *membership.HostInfo,
 	serviceResolver membership.ServiceResolver,
+	domainReplicationQueue persistence.DomainReplicationQueue,
+	domainReplicationTaskExecutor domain.ReplicationTaskExecutor,
 ) *Replicator {
 
 	logger = logger.WithTags(tag.ComponentReplicator)
 	return &Replicator{
-		hostInfo:          hostInfo,
-		serviceResolver:   serviceResolver,
-		domainCache:       domainCache,
-		clusterMetadata:   clusterMetadata,
-		domainReplicator:  NewDomainReplicator(metadataManagerV2, logger),
-		clientBean:        clientBean,
-		historyClient:     clientBean.GetHistoryClient(),
-		config:            config,
-		client:            client,
-		logger:            logger,
-		metricsClient:     metricsClient,
-		historySerializer: persistence.NewPayloadSerializer(),
+		hostInfo:                      hostInfo,
+		serviceResolver:               serviceResolver,
+		domainCache:                   domainCache,
+		clusterMetadata:               clusterMetadata,
+		domainReplicationTaskExecutor: domainReplicationTaskExecutor,
+		clientBean:                    clientBean,
+		historyClient:                 clientBean.GetHistoryClient(),
+		config:                        config,
+		client:                        client,
+		logger:                        logger,
+		metricsClient:                 metricsClient,
+		historySerializer:             persistence.NewPayloadSerializer(),
+		domainReplicationQueue:        domainReplicationQueue,
 	}
 }
 
@@ -125,11 +126,12 @@ func (r *Replicator) Start() error {
 				processor := newDomainReplicationMessageProcessor(
 					clusterName,
 					r.logger.WithTags(tag.ComponentReplicationTaskProcessor, tag.SourceCluster(clusterName)),
-					r.clientBean.GetRemoteFrontendClient(clusterName),
+					r.clientBean.GetRemoteAdminClient(clusterName),
 					r.metricsClient,
-					r.domainReplicator,
+					r.domainReplicationTaskExecutor,
 					r.hostInfo,
 					r.serviceResolver,
+					r.domainReplicationQueue,
 				)
 				r.domainProcessors = append(r.domainProcessors, processor)
 			} else {
@@ -172,8 +174,17 @@ func (r *Replicator) createKafkaProcessors(currentClusterName string, clusterNam
 			return historyClient.ReplicateRawEvents(ctx, request)
 		},
 		r.historySerializer,
-		replicationTimeout,
+		r.config.ReplicationTaskContextTimeout(),
 		r.logger,
+	)
+	nDCHistoryReplicator := xdc.NewNDCHistoryResender(
+		r.domainCache,
+		adminClient,
+		func(ctx context.Context, request *h.ReplicateEventsV2Request) error {
+			return historyClient.ReplicateEventsV2(ctx, request)
+		},
+		r.historySerializer,
+		logger,
 	)
 	r.processors = append(r.processors, newReplicationTaskProcessor(
 		currentClusterName,
@@ -183,8 +194,9 @@ func (r *Replicator) createKafkaProcessors(currentClusterName string, clusterNam
 		r.config,
 		logger,
 		r.metricsClient,
-		r.domainReplicator,
+		r.domainReplicationTaskExecutor,
 		historyRereplicator,
+		nDCHistoryReplicator,
 		r.historyClient,
 		r.domainCache,
 		task.NewSequentialTaskProcessor(

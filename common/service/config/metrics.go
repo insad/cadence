@@ -28,6 +28,7 @@ import (
 	"github.com/uber-go/tally"
 	"github.com/uber-go/tally/prometheus"
 	tallystatsdreporter "github.com/uber-go/tally/statsd"
+
 	"github.com/uber/cadence/common/log"
 	"github.com/uber/cadence/common/log/tag"
 	statsdreporter "github.com/uber/cadence/common/metrics/tally/statsd"
@@ -91,6 +92,7 @@ func (c *Metrics) newM3Scope(logger log.Logger) tally.Scope {
 	scopeOpts := tally.ScopeOptions{
 		Tags:           c.Tags,
 		CachedReporter: reporter,
+		Prefix:         c.Prefix,
 	}
 	scope, _ := tally.NewRootScope(scopeOpts, time.Second)
 	return scope
@@ -113,6 +115,7 @@ func (c *Metrics) newStatsdScope(logger log.Logger) tally.Scope {
 	scopeOpts := tally.ScopeOptions{
 		Tags:     c.Tags,
 		Reporter: reporter,
+		Prefix:   c.Prefix,
 	}
 	scope, _ := tally.NewRootScope(scopeOpts, time.Second)
 	return scope
@@ -137,6 +140,7 @@ func (c *Metrics) newPrometheusScope(logger log.Logger) tally.Scope {
 		CachedReporter:  reporter,
 		Separator:       prometheus.DefaultSeparator,
 		SanitizeOptions: &sanitizeOptions,
+		Prefix:          c.Prefix,
 	}
 	scope, _ := tally.NewRootScope(scopeOpts, time.Second)
 	return scope

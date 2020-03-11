@@ -24,67 +24,14 @@ import (
 	"context"
 	"time"
 
-	h "github.com/uber/cadence/.gen/go/history"
 	"github.com/uber/cadence/.gen/go/replicator"
-	workflow "github.com/uber/cadence/.gen/go/shared"
 	"github.com/uber/cadence/common"
 	"github.com/uber/cadence/common/definition"
 	"github.com/uber/cadence/common/persistence"
+	"github.com/uber/cadence/common/task"
 )
 
 type (
-	historyEventNotification struct {
-		id                     definition.WorkflowIdentifier
-		lastFirstEventID       int64
-		nextEventID            int64
-		previousStartedEventID int64
-		timestamp              time.Time
-		currentBranchToken     []byte
-		workflowState          int
-		workflowCloseState     int
-	}
-
-	// Engine represents an interface for managing workflow execution history.
-	Engine interface {
-		common.Daemon
-
-		StartWorkflowExecution(ctx context.Context, request *h.StartWorkflowExecutionRequest) (*workflow.StartWorkflowExecutionResponse, error)
-		GetMutableState(ctx context.Context, request *h.GetMutableStateRequest) (*h.GetMutableStateResponse, error)
-		PollMutableState(ctx context.Context, request *h.PollMutableStateRequest) (*h.PollMutableStateResponse, error)
-		DescribeMutableState(ctx context.Context, request *h.DescribeMutableStateRequest) (*h.DescribeMutableStateResponse, error)
-		ResetStickyTaskList(ctx context.Context, resetRequest *h.ResetStickyTaskListRequest) (*h.ResetStickyTaskListResponse, error)
-		DescribeWorkflowExecution(ctx context.Context, request *h.DescribeWorkflowExecutionRequest) (*workflow.DescribeWorkflowExecutionResponse, error)
-		RecordDecisionTaskStarted(ctx context.Context, request *h.RecordDecisionTaskStartedRequest) (*h.RecordDecisionTaskStartedResponse, error)
-		RecordActivityTaskStarted(ctx context.Context, request *h.RecordActivityTaskStartedRequest) (*h.RecordActivityTaskStartedResponse, error)
-		RespondDecisionTaskCompleted(ctx context.Context, request *h.RespondDecisionTaskCompletedRequest) (*h.RespondDecisionTaskCompletedResponse, error)
-		RespondDecisionTaskFailed(ctx context.Context, request *h.RespondDecisionTaskFailedRequest) error
-		RespondActivityTaskCompleted(ctx context.Context, request *h.RespondActivityTaskCompletedRequest) error
-		RespondActivityTaskFailed(ctx context.Context, request *h.RespondActivityTaskFailedRequest) error
-		RespondActivityTaskCanceled(ctx context.Context, request *h.RespondActivityTaskCanceledRequest) error
-		RecordActivityTaskHeartbeat(ctx context.Context, request *h.RecordActivityTaskHeartbeatRequest) (*workflow.RecordActivityTaskHeartbeatResponse, error)
-		RequestCancelWorkflowExecution(ctx context.Context, request *h.RequestCancelWorkflowExecutionRequest) error
-		SignalWorkflowExecution(ctx context.Context, request *h.SignalWorkflowExecutionRequest) error
-		SignalWithStartWorkflowExecution(ctx context.Context, request *h.SignalWithStartWorkflowExecutionRequest) (*workflow.StartWorkflowExecutionResponse, error)
-		RemoveSignalMutableState(ctx context.Context, request *h.RemoveSignalMutableStateRequest) error
-		TerminateWorkflowExecution(ctx context.Context, request *h.TerminateWorkflowExecutionRequest) error
-		ResetWorkflowExecution(ctx context.Context, request *h.ResetWorkflowExecutionRequest) (*workflow.ResetWorkflowExecutionResponse, error)
-		ScheduleDecisionTask(ctx context.Context, request *h.ScheduleDecisionTaskRequest) error
-		RecordChildExecutionCompleted(ctx context.Context, request *h.RecordChildExecutionCompletedRequest) error
-		ReplicateEvents(ctx context.Context, request *h.ReplicateEventsRequest) error
-		ReplicateRawEvents(ctx context.Context, request *h.ReplicateRawEventsRequest) error
-		ReplicateEventsV2(ctx context.Context, request *h.ReplicateEventsV2Request) error
-		SyncShardStatus(ctx context.Context, request *h.SyncShardStatusRequest) error
-		SyncActivity(ctx context.Context, request *h.SyncActivityRequest) error
-		GetReplicationMessages(ctx context.Context, taskID int64) (*replicator.ReplicationMessages, error)
-		QueryWorkflow(ctx context.Context, request *h.QueryWorkflowRequest) (*h.QueryWorkflowResponse, error)
-		ReapplyEvents(ctx context.Context, domainUUID string, workflowID string, events []*workflow.HistoryEvent) error
-
-		NotifyNewHistoryEvent(event *historyEventNotification)
-		NotifyNewTransferTasks(tasks []persistence.Task)
-		NotifyNewReplicationTasks(tasks []persistence.Task)
-		NotifyNewTimerTasks(tasks []persistence.Task)
-	}
-
 	// EngineFactory is used to create an instance of sharded history engine
 	EngineFactory interface {
 		CreateEngine(context ShardContext) Engine
@@ -98,7 +45,15 @@ type (
 	// ReplicatorQueueProcessor is the interface for replicator queue processor
 	ReplicatorQueueProcessor interface {
 		queueProcessor
-		getTasks(ctx context.Context, readLevel int64) (*replicator.ReplicationMessages, error)
+		getTasks(
+			ctx context.Context,
+			pollingCluster string,
+			lastReadTaskID int64,
+		) (*replicator.ReplicationMessages, error)
+		getTask(
+			ctx context.Context,
+			taskInfo *replicator.ReplicationTaskInfo,
+		) (*replicator.ReplicationTask, error)
 	}
 
 	queueAckMgr interface {
@@ -120,10 +75,30 @@ type (
 		GetDomainID() string
 	}
 
+	queueTask interface {
+		task.PriorityTask
+		queueTaskInfo
+		GetQueueType() queueType
+		GetShardID() int
+	}
+
+	queueTaskExecutor interface {
+		execute(taskInfo queueTaskInfo, shouldProcessTask bool) error
+	}
+
+	queueTaskProcessor interface {
+		common.Daemon
+		StopShardProcessor(int)
+		Submit(queueTask) error
+		TrySubmit(queueTask) (bool, error)
+	}
+
+	// TODO: deprecate this interface in favor of the task interface
+	// defined in common/task package
 	taskExecutor interface {
-		process(task queueTaskInfo, shouldProcessTask bool) (int, error)
-		complete(task queueTaskInfo)
-		getTaskFilter() queueTaskFilter
+		process(taskInfo *taskInfo) (int, error)
+		complete(taskInfo *taskInfo)
+		getTaskFilter() taskFilter
 	}
 
 	processor interface {
@@ -131,25 +106,6 @@ type (
 		readTasks(readLevel int64) ([]queueTaskInfo, bool, error)
 		updateAckLevel(taskID int64) error
 		queueShutdown() error
-	}
-
-	transferQueueProcessor interface {
-		common.Daemon
-		FailoverDomain(domainIDs map[string]struct{})
-		NotifyNewTask(clusterName string, transferTasks []persistence.Task)
-		LockTaskPrrocessing()
-		UnlockTaskPrrocessing()
-	}
-
-	// TODO the timer queue processor and the one below, timer processor
-	// in combination are confusing, we should consider a better naming
-	// convention, or at least come with a better name for this case.
-	timerQueueProcessor interface {
-		common.Daemon
-		FailoverDomain(domainIDs map[string]struct{})
-		NotifyNewTimers(clusterName string, timerTask []persistence.Task)
-		LockTaskPrrocessing()
-		UnlockTaskPrrocessing()
 	}
 
 	timerProcessor interface {
@@ -161,8 +117,8 @@ type (
 		getFinishedChan() <-chan struct{}
 		readTimerTasks() ([]*persistence.TimerTaskInfo, *persistence.TimerTaskInfo, bool, error)
 		completeTimerTask(timerTask *persistence.TimerTaskInfo)
-		getAckLevel() TimerSequenceID
-		getReadLevel() TimerSequenceID
+		getAckLevel() timerKey
+		getReadLevel() timerKey
 		updateAckLevel()
 	}
 
@@ -172,4 +128,12 @@ type (
 		WatchHistoryEvent(identifier definition.WorkflowIdentifier) (string, chan *historyEventNotification, error)
 		UnwatchHistoryEvent(identifier definition.WorkflowIdentifier, subscriberID string) error
 	}
+
+	queueType int
+)
+
+const (
+	transferQueueType queueType = iota + 1
+	timerQueueType
+	replicationQueueType
 )

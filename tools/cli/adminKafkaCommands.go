@@ -28,6 +28,8 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/uber/cadence/common/auth"
+
 	"io"
 	"io/ioutil"
 	"os"
@@ -41,6 +43,11 @@ import (
 	"github.com/Shopify/sarama"
 	cluster "github.com/bsm/sarama-cluster"
 	"github.com/gocql/gocql"
+	"github.com/urfave/cli"
+	"go.uber.org/thriftrw/protocol"
+	"go.uber.org/thriftrw/wire"
+	yaml "gopkg.in/yaml.v2"
+
 	"github.com/uber/cadence/.gen/go/indexer"
 	"github.com/uber/cadence/.gen/go/replicator"
 	"github.com/uber/cadence/.gen/go/shared"
@@ -51,10 +58,6 @@ import (
 	"github.com/uber/cadence/common/persistence/cassandra"
 	"github.com/uber/cadence/common/service/dynamicconfig"
 	"github.com/uber/cadence/service/history"
-	"github.com/urfave/cli"
-	"go.uber.org/thriftrw/protocol"
-	"go.uber.org/thriftrw/wire"
-	yaml "gopkg.in/yaml.v2"
 )
 
 type filterFn func(*replicator.ReplicationTask) bool
@@ -68,7 +71,7 @@ const (
 )
 
 const (
-	bufferSize                 = 4096
+	bufferSize                 = 8192
 	preambleVersion0      byte = 0x59
 	malformedMessage           = "Input was malformed"
 	chanBufferSize             = 10000
@@ -295,7 +298,10 @@ Loop:
 						*task.HistoryTaskAttributes.NextEventId,
 					)
 				}
-				outputFile.WriteString(fmt.Sprintf("%v\n", outStr))
+				_, err = outputFile.WriteString(fmt.Sprintf("%v\n", outStr))
+				if err != nil {
+					ErrorAndExit("Failed to write to file", fmt.Errorf("err: %v", err))
+				}
 			}
 		}
 	}
@@ -341,7 +347,10 @@ Loop:
 						msg.GetVersion(),
 					)
 				}
-				outputFile.WriteString(fmt.Sprintf("%v\n", outStr))
+				_, err = outputFile.WriteString(fmt.Sprintf("%v\n", outStr))
+				if err != nil {
+					ErrorAndExit("Failed to write to file", fmt.Errorf("err: %v", err))
+				}
 			}
 		}
 	}
@@ -461,7 +470,7 @@ func decodeVisibility(message []byte, val *indexer.Message) error {
 // ClustersConfig describes the kafka clusters
 type ClustersConfig struct {
 	Clusters map[string]messaging.ClusterConfig
-	TLS      messaging.TLS
+	TLS      auth.TLS
 }
 
 func doRereplicate(shardID int, domainID, wid, rid string, minID, maxID int64, targets []string, producer messaging.Producer, session *gocql.Session) {
@@ -694,6 +703,9 @@ func AdminPurgeTopic(c *cli.Context) {
 
 	consumer = createConsumerAndWaitForReady(brokers, tlsConfig, group, topic)
 	msg, ok := <-consumer.Messages()
+	if !ok {
+		fmt.Println("consumer channel is closed")
+	}
 	fmt.Printf("current offset sample: %v: %v \n", msg.Partition, msg.Offset)
 }
 

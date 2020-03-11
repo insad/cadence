@@ -7,7 +7,7 @@ services:
     environment:
       - "MYSQL_ROOT_PASSWORD=root"
   statsd:
-    image: hopsoft/graphite-statsd
+    image: graphiteapp/graphite-statsd
     ports:
       - "8080:80"
       - "2003:2003"
@@ -31,7 +31,7 @@ services:
       - mysql
       - statsd
   cadence-web:
-    image: ubercadence/web:3.4.1
+    image: ubercadence/web:latest
     environment:
       - "CADENCE_TCHANNEL_PEERS=cadence:7933"
     ports:

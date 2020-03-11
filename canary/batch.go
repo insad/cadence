@@ -25,6 +25,7 @@ import (
 	"fmt"
 	"time"
 
+	"go.uber.org/cadence"
 	"go.uber.org/cadence/.gen/go/shared"
 	"go.uber.org/cadence/client"
 	"go.uber.org/cadence/workflow"
@@ -42,7 +43,6 @@ func init() {
 const (
 	// TODO: to get rid of them:
 	//  after batch job has an API, we should use the API: https://github.com/uber/cadence/issues/2225
-	sysDomainName             = "cadence-system"
 	sysBatchWFTypeName        = "cadence-sys-batch-workflow"
 	systemBatcherTaskListName = "cadence-sys-batcher-tasklist"
 
@@ -66,7 +66,7 @@ type (
 func batchWorkflow(ctx workflow.Context, scheduledTimeNanos int64, domain string) error {
 	profile, err := beginWorkflow(ctx, wfTypeBatch, scheduledTimeNanos)
 	if err != nil {
-		return profile.end(err)
+		return err
 	}
 
 	cwo := workflow.ChildWorkflowOptions{
@@ -84,27 +84,39 @@ func batchWorkflow(ctx workflow.Context, scheduledTimeNanos int64, domain string
 	for i := 0; i < numChildrenPerLevel; i++ {
 		err := fs[i].GetChildWorkflowExecution().Get(ctx, nil)
 		if err != nil {
-			return err
+			return profile.end(err)
 		}
 	}
 
 	// waiting for visibility
-	workflow.Sleep(ctx, time.Second*2)
+	if err := workflow.Sleep(ctx, time.Second*2); err != nil {
+		return profile.end(err)
+	}
 
+	retryPolicy := &cadence.RetryPolicy{
+		InitialInterval:    time.Second,
+		BackoffCoefficient: 2,
+		MaximumInterval:    time.Second * 12,
+		ExpirationInterval: time.Second * 3,
+		MaximumAttempts:    4,
+	}
 	ctx = workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
 		TaskList:               taskListName,
 		ScheduleToStartTimeout: scheduleToStartTimeout,
 		StartToCloseTimeout:    activityTaskTimeout,
+		RetryPolicy:            retryPolicy,
 	})
 
 	startTime := workflow.Now(ctx).Format(time.RFC3339)
 	err = workflow.ExecuteActivity(ctx, activityTypeStartBatch, domain, startTime).Get(ctx, nil)
 	if err != nil {
-		return err
+		return profile.end(err)
 	}
 
 	// waiting for visibility
-	workflow.Sleep(ctx, time.Second*2)
+	if err := workflow.Sleep(ctx, time.Second*2); err != nil {
+		return profile.end(err)
+	}
 
 	err = workflow.ExecuteActivity(ctx, activityTypeVerifyBatch, domain, startTime).Get(ctx, nil)
 
@@ -114,7 +126,7 @@ func batchWorkflow(ctx workflow.Context, scheduledTimeNanos int64, domain string
 func batchWorkflowParent(ctx workflow.Context, scheduledTimeNanos int64) error {
 	profile, err := beginWorkflow(ctx, wfTypeBatchParent, scheduledTimeNanos)
 	if err != nil {
-		return profile.end(err)
+		return err
 	}
 
 	cwo := workflow.ChildWorkflowOptions{
@@ -132,7 +144,7 @@ func batchWorkflowParent(ctx workflow.Context, scheduledTimeNanos int64) error {
 	for i := 0; i < numChildrenPerLevel; i++ {
 		err := fs[i].Get(ctx, nil)
 		if err != nil {
-			return err
+			return profile.end(err)
 		}
 	}
 
@@ -142,9 +154,12 @@ func batchWorkflowParent(ctx workflow.Context, scheduledTimeNanos int64) error {
 func batchWorkflowChild(ctx workflow.Context, scheduledTimeNanos int64) error {
 	profile, err := beginWorkflow(ctx, wfTypeBatchChild, scheduledTimeNanos)
 	if err != nil {
+		return err
+	}
+
+	if err := workflow.Sleep(ctx, time.Hour); err != nil {
 		return profile.end(err)
 	}
-	workflow.Sleep(ctx, time.Hour)
 	return profile.end(err)
 }
 
@@ -162,6 +177,10 @@ func startBatchWorkflow(ctx context.Context, domain, startTime string) error {
 		ExecutionStartToCloseTimeout:    childWorkflowTimeout,
 		DecisionTaskStartToCloseTimeout: decisionTaskTimeout,
 		TaskList:                        systemBatcherTaskListName,
+		SearchAttributes: map[string]interface{}{
+			"CustomDomain": domain,
+			"Operator":     "admin",
+		},
 	}
 
 	run, err := sdkClient.ExecuteWorkflow(ctx, options, sysBatchWFTypeName, params)

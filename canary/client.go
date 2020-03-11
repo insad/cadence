@@ -32,10 +32,6 @@ import (
 	"go.uber.org/cadence/workflow"
 )
 
-const (
-	cadenceConfig = "cadence"
-)
-
 // cadenceClient is an abstraction on top of
 // the cadence library client that serves as
 // a union of all the client interfaces that

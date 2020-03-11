@@ -58,7 +58,7 @@ type (
 		domainCache     cache.DomainCache
 		eventsCache     eventsCache
 		clusterMetadata cluster.Metadata
-		historyV2Mgr    persistence.HistoryV2Manager
+		historyV2Mgr    persistence.HistoryManager
 		taskRefresher   mutableStateTaskRefresher
 
 		rebuiltHistorySize int64
@@ -78,7 +78,7 @@ func newNDCStateRebuilder(
 		domainCache:     shard.GetDomainCache(),
 		eventsCache:     shard.GetEventsCache(),
 		clusterMetadata: shard.GetService().GetClusterMetadata(),
-		historyV2Mgr:    shard.GetHistoryV2Manager(),
+		historyV2Mgr:    shard.GetHistoryManager(),
 		taskRefresher: newMutableStateTaskRefresher(
 			shard.GetConfig(),
 			shard.GetDomainCache(),
@@ -171,6 +171,8 @@ func (r *nDCStateRebuilderImpl) rebuild(
 		return nil, 0, err
 	}
 
+	// mutable state rebuild should use the same time stamp
+	rebuiltMutableState.GetExecutionInfo().StartTimestamp = now
 	return rebuiltMutableState, r.rebuiltHistorySize, nil
 }
 
@@ -183,7 +185,14 @@ func (r *nDCStateRebuilderImpl) initializeBuilders(
 		r.logger,
 		domainEntry,
 	)
-	stateBuilder := newStateBuilder(r.shard, resetMutableStateBuilder, r.logger)
+	stateBuilder := newStateBuilder(
+		r.shard,
+		r.logger,
+		resetMutableStateBuilder,
+		func(mutableState mutableState) mutableStateTaskGenerator {
+			return newMutableStateTaskGenerator(r.shard.GetDomainCache(), r.logger, mutableState)
+		},
+	)
 	return resetMutableStateBuilder, stateBuilder
 }
 
@@ -194,7 +203,7 @@ func (r *nDCStateRebuilderImpl) applyEvents(
 	requestID string,
 ) error {
 
-	_, _, _, err := stateBuilder.applyEvents(
+	_, err := stateBuilder.applyEvents(
 		workflowIdentifier.DomainID,
 		requestID,
 		shared.WorkflowExecution{

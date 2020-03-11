@@ -23,19 +23,22 @@ package cli
 import (
 	"bufio"
 	"fmt"
-	"github.com/fatih/color"
-	"github.com/uber/cadence/.gen/go/admin"
-	"github.com/uber/cadence/.gen/go/shared"
-	"github.com/urfave/cli"
 	"os"
 	"strings"
+
+	"github.com/fatih/color"
+	"github.com/urfave/cli"
+
+	"github.com/uber/cadence/.gen/go/admin"
+	"github.com/uber/cadence/.gen/go/shared"
+	"github.com/uber/cadence/common"
 )
 
 // AdminAddSearchAttribute to whitelist search attribute
 func AdminAddSearchAttribute(c *cli.Context) {
 	key := getRequiredOption(c, FlagSearchAttributesKey)
 	valType := getRequiredIntOption(c, FlagSearchAttributesType)
-	if valType < 0 || valType >= 5 {
+	if !isValueTypeValid(valType) {
 		ErrorAndExit("Unknown Search Attributes value type.", nil)
 	}
 
@@ -56,6 +59,7 @@ func AdminAddSearchAttribute(c *cli.Context) {
 		SearchAttribute: map[string]shared.IndexedValueType{
 			key: shared.IndexedValueType(valType),
 		},
+		SecurityToken: common.StringPtr(c.String(FlagSecurityToken)),
 	}
 
 	err := adminClient.AddSearchAttribute(ctx, request)
@@ -63,6 +67,20 @@ func AdminAddSearchAttribute(c *cli.Context) {
 		ErrorAndExit("Add search attribute failed.", err)
 	}
 	fmt.Println("Success")
+}
+
+// AdminDescribeCluster is used to dump information about the cluster
+func AdminDescribeCluster(c *cli.Context) {
+	adminClient := cFactory.ServerAdminClient(c)
+
+	ctx, cancel := newContext(c)
+	defer cancel()
+	response, err := adminClient.DescribeCluster(ctx)
+	if err != nil {
+		ErrorAndExit("Operation DescribeCluster failed.", err)
+	}
+
+	prettyPrintJSONObject(response)
 }
 
 func intValTypeToString(valType int) string {
@@ -82,4 +100,8 @@ func intValTypeToString(valType int) string {
 	default:
 		return ""
 	}
+}
+
+func isValueTypeValid(valType int) bool {
+	return valType >= 0 && valType <= 5
 }
